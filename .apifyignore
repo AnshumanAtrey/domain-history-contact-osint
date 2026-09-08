@@ -1,0 +1,29 @@
+# Apify ignore file - files to exclude from Actor build
+
+# Node modules
+node_modules/
+
+# Local storage
+apify_storage/
+storage/
+
+# Environment files
+.env
+.env.local
+
+# IDE
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Tests
+test/
+tests/
+*.test.js
+*.spec.js
