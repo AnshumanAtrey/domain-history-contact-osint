@@ -1,0 +1,29 @@
+{
+  "title": "Domain History Contact OSINT",
+  "type": "object",
+  "schemaVersion": 1,
+  "properties": {
+    "domains": {
+      "title": "Domain",
+      "type": "string",
+      "description": "Type a domain and press Start. Works on live, parked, expired and fully dead domains. For several domains, put one per line.",
+      "editor": "textarea",
+      "prefill": "theranos.com"
+    },
+    "depth": {
+      "title": "How far back to dig",
+      "type": "string",
+      "description": "Standard suits almost every domain. Quick is a fast look, Deep spends longer and costs more on domains with a large archive.",
+      "editor": "select",
+      "enum": ["quick", "standard", "deep"],
+      "enumTitles": [
+        "Quick - fastest, roughly 30 archived pages",
+        "Standard - recommended, roughly 120 archived pages",
+        "Deep - thorough, up to 500 archived pages"
+      ],
+      "default": "standard",
+      "prefill": "standard"
+    }
+  },
+  "required": ["domains"]
+}

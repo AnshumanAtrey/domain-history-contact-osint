@@ -1,0 +1,103 @@
+{
+  "actorSpecification": 1,
+  "name": "domain-history-contact-osint",
+  "title": "Domain History Contact OSINT - WHOIS, DNS + Wayback Emails",
+  "version": "0.1",
+  "buildTag": "latest",
+  "description": "Submit a domain, get its full history and owner contacts with a source URL on every finding. Works on dead, expired and parked domains by reading web archives, certificate transparency, RDAP and passive DNS.",
+  "categories": ["SECURITY", "DEVELOPER_TOOLS"],
+  "dockerfile": "./Dockerfile",
+  "readme": "../README.md",
+  "input": "./INPUT_SCHEMA.json",
+  "output": "./output_schema.json",
+  "minMemoryMbytes": 2048,
+  "storages": {
+    "datasets": {
+      "default": {
+        "actorSpecification": 1,
+        "title": "Domain Reports",
+        "description": "One row per domain. Always populated, even for a fully dead domain, including a per-source coverage array explaining which sources answered and which did not.",
+        "views": {
+          "overview": {
+            "title": "Overview",
+            "transformation": {
+              "fields": [
+                "domain",
+                "liveStatus",
+                "contactsFound",
+                "sourcesOk",
+                "sourcesEmpty",
+                "firstSeen",
+                "lastSeen",
+                "registrantOrg",
+                "scannedAt"
+              ]
+            },
+            "display": {
+              "component": "table",
+              "properties": {
+                "domain": { "label": "Domain", "format": "text" },
+                "liveStatus": { "label": "Status", "format": "text" },
+                "contactsFound": { "label": "Contacts", "format": "number" },
+                "sourcesOk": { "label": "Sources OK", "format": "number" },
+                "sourcesEmpty": { "label": "Sources Empty", "format": "number" },
+                "firstSeen": { "label": "First Archived", "format": "text" },
+                "lastSeen": { "label": "Last Archived", "format": "text" },
+                "registrantOrg": { "label": "Registrant Org", "format": "text" },
+                "scannedAt": { "label": "Scanned", "format": "date" }
+              }
+            }
+          },
+          "coverage": {
+            "title": "Source Coverage",
+            "transformation": { "fields": ["domain", "sources"] },
+            "display": {
+              "component": "table",
+              "properties": {
+                "domain": { "label": "Domain", "format": "text" },
+                "sources": { "label": "Per-source Result", "format": "array" }
+              }
+            }
+          }
+        }
+      },
+      "contacts": {
+        "actorSpecification": 1,
+        "title": "Contacts With Provenance",
+        "description": "One row per contact per source. Every row carries the exact source URL, snapshot timestamp and extraction method that produced it.",
+        "views": {
+          "contacts": {
+            "title": "Contacts",
+            "transformation": {
+              "fields": [
+                "domain",
+                "type",
+                "value",
+                "confidence",
+                "sourceType",
+                "sourceUrl",
+                "snapshotTimestamp",
+                "extractionMethod",
+                "occurrences"
+              ]
+            },
+            "display": {
+              "component": "table",
+              "properties": {
+                "domain": { "label": "Domain", "format": "text" },
+                "type": { "label": "Type", "format": "text" },
+                "value": { "label": "Value", "format": "text" },
+                "confidence": { "label": "Confidence", "format": "text" },
+                "sourceType": { "label": "Source", "format": "text" },
+                "sourceUrl": { "label": "Source URL", "format": "link" },
+                "snapshotTimestamp": { "label": "Captured", "format": "text" },
+                "extractionMethod": { "label": "Method", "format": "text" },
+                "occurrences": { "label": "Seen", "format": "number" }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
