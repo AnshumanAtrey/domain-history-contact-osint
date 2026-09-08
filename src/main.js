@@ -289,7 +289,7 @@ for (const domain of domains) {
       publicCode: codeRefs ? { count: codeRefs.count, references: codeRefs.codeReferences } : null,
     },
 
-    commonCrawl: cc ? { count: cc.count, index: cc.index, urls: cc.urls?.slice(0, 50) } : null,
+    commonCrawl: cc ? { count: cc.count, indexesQueried: cc.indexesQueried, urls: cc.urls?.slice(0, 50) } : null,
 
     firstSeen: stamps[0] || certs?.firstCertificate || null,
     lastSeen: stamps[stamps.length - 1] || certs?.lastCertificate || null,

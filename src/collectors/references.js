@@ -134,19 +134,73 @@ export async function fetchGrepApp(domain) {
   };
 }
 
-/** Common Crawl index - a second, unrate-limited URL universe. */
+/**
+ * Common Crawl index - a second, unrate-limited URL universe.
+ *
+ * Two behaviours worth encoding. First, the index server answers 404 when it
+ * simply holds nothing for a domain, which is NOT a failure - reporting it as one
+ * would tell the user a source broke when it actually answered "nothing here",
+ * and the whole point of the coverage report is that distinction. Second, the
+ * crawl id rolls forward every few weeks, so it is resolved from collinfo.json
+ * rather than hardcoded, with a fallback if that lookup fails.
+ */
+let ccIndexListCache = null;
+
+/**
+ * Common Crawl keeps a separate index per crawl, and a DEAD domain only exists in
+ * OLDER crawls - querying just the newest one returns nothing, which would make
+ * this source useless for exactly the input this actor is built for. Verified:
+ * theranos.com returns 0 rows from CC-MAIN-2026-34 but 5 rows from CC-MAIN-2025-13.
+ * So sample a handful of indexes spread across the available history and merge.
+ */
+async function ccIndexes(limit = 4) {
+  if (!ccIndexListCache) {
+    try {
+      const { json } = await httpGet('https://index.commoncrawl.org/collinfo.json', { timeoutMs: 20_000 });
+      ccIndexListCache = (json || []).map((c) => c.id).filter(Boolean);
+    } catch {
+      ccIndexListCache = ['CC-MAIN-2026-34', 'CC-MAIN-2025-13', 'CC-MAIN-2023-14', 'CC-MAIN-2020-16'];
+    }
+  }
+  const all = ccIndexListCache;
+  if (all.length <= limit) return all;
+  // Newest, then evenly spaced back through history.
+  const picks = [all[0]];
+  const step = (all.length - 1) / (limit - 1);
+  for (let i = 1; i < limit; i += 1) picks.push(all[Math.min(all.length - 1, Math.round(i * step))]);
+  return [...new Set(picks)];
+}
+
 export async function fetchCommonCrawl(domain) {
-  const index = 'CC-MAIN-2025-13';
-  const url = `https://index.commoncrawl.org/${index}-index?url=${encodeURIComponent(`${domain}/*`)}&output=json&limit=200`;
-  const { body } = await httpGet(url, { timeoutMs: 40_000, raw: true });
-  const rows = String(body).trim().split('\n').filter(Boolean).map((l) => {
-    try { return JSON.parse(l); } catch { return null; }
-  }).filter(Boolean);
+  const indexes = await ccIndexes();
+  const rows = [];
+  const queried = [];
+  for (const index of indexes) {
+    const url = `https://index.commoncrawl.org/${index}-index?url=${encodeURIComponent(`${domain}/*`)}&output=json&limit=100`;
+    try {
+      const { body } = await httpGet(url, { timeoutMs: 40_000, raw: true });
+      const parsed = String(body).trim().split('\n').filter(Boolean)
+        .map((l) => { try { return JSON.parse(l); } catch { return null; } })
+        .filter(Boolean);
+      rows.push(...parsed.map((r) => ({ ...r, ccIndex: index })));
+      queried.push({ index, status: 'ok', rows: parsed.length, sourceUrl: url });
+    } catch (err) {
+      // 404 means this crawl holds nothing for the domain. That is an answer, not a failure.
+      queried.push({
+        index,
+        status: err.status === 404 ? 'empty' : 'failed',
+        rows: 0,
+        sourceUrl: url,
+        error: err.status === 404 ? null : String(err.message).slice(0, 140),
+      });
+    }
+  }
+
   return {
     count: rows.length,
-    index,
-    sourceUrl: url,
-    urls: rows.slice(0, 100).map((r) => ({
+    indexesQueried: queried,
+    urls: rows.slice(0, 150).map((r) => ({
+      ccIndex: r.ccIndex,
       url: r.url, timestamp: r.timestamp, status: r.status,
       mime: r.mime, digest: r.digest,
       // These three make the WARC record byte-addressable for a later body fetch.
@@ -154,6 +208,6 @@ export async function fetchCommonCrawl(domain) {
     })),
     note: rows.length
       ? 'Common Crawl is free and unrate-limited, and its WARC records hold the original response headers and body. Byte offsets are included so bodies can be fetched directly.'
-      : `No Common Crawl records in ${index} for this domain.`,
+      : `No Common Crawl records for this domain across ${queried.length} crawl indexes (${queried.map((q) => q.index).join(', ')}).`,
   };
 }
