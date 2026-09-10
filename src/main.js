@@ -101,9 +101,9 @@ log.info(`Sections: ${[...sections].join(', ')}`);
  * per source, then one summary row per domain, so a run is never empty. The full
  * report (registration, DNS and hosting history, certificates, archived pages,
  * tracking IDs, mentions, coverage) is the run's OUTPUT record - Console shows it
- * on the Output tab - and REPORT-<domain> for multi-domain runs. No named storages
- * are opened, so the Actor runs under limited permissions, which Store search and
- * the MCP index require before a new Actor has usage.
+ * on the Output tab - and REPORT-<domain> for multi-domain runs. Everything lives in
+ * the run's own default storages: nothing named, nothing account-level, which is
+ * what the Actor's limited-permissions declaration promises.
  */
 const reports = [];
 let browser = null;

@@ -59,10 +59,12 @@ People, organisations, IP geolocation, and WHOIS history — closes the TruTrace
   the URL and capture date that produced it; people and organisations also carry `role`,
   `worksFor`, `relation` and the evidence `snippet`. One summary row per domain closes each
   block with the coverage verdict, so a run is never an empty table. The full report is the
-  run's `OUTPUT` record (Console's Output tab) and `REPORT-<domain>`. The previous layout used
-  a named `contacts` dataset, which forces full permissions - and Apify excludes low-usage
-  full-permission Actors from Store search results and from the MCP index. No named storages
-  now, so the Actor is declared with limited permissions.
+  run's `OUTPUT` record (Console's Output tab) and `REPORT-<domain>`. The previous layout put
+  the report in the dataset and the contacts in a separate named dataset, so the Store preview
+  showed one JSON blob per domain and the evidence table lived elsewhere. Now every output is
+  inside the run's own default storages, which is the contract the Actor's limited-permissions
+  declaration is meant for, the Store preview is the contacts table itself, and pay-per-result
+  maps directly onto "one row per contact".
 - **Store listing is deployed from the repo.** `apify push` never updates title, description,
   SEO fields, categories, permissions or the example input on an existing Actor, so those were
   empty on the platform. `scripts/store-metadata.mjs` runs after every deploy, validates the
