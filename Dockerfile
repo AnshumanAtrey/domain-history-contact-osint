@@ -2,8 +2,12 @@
 FROM apify/actor-node-playwright-chrome:22
 
 COPY --chown=myuser:myuser package*.json ./
+# No --omit=optional: @huggingface/transformers hard-depends on sharp, and sharp
+# ships its native binary as an OPTIONAL platform package (@img/sharp-linux-x64).
+# Omitting optionals installs sharp without a binary, the import throws, and the
+# model prefetch below exits 1. Reproduced locally; first Apify build failed on it.
 RUN npm --quiet set progress=false \
- && npm install --omit=dev --omit=optional \
+ && npm install --omit=dev \
  && echo "installed:" && (npm ls --omit=dev --all || true)
 
 # Bake the multilingual NER model (173MB, int8) into the image. At runtime
