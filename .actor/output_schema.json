@@ -1,19 +1,19 @@
 {
   "actorOutputSchemaVersion": 1,
   "title": "Domain History Contact OSINT Output",
-  "description": "A per-domain intelligence report sectioned by the checkboxes you ticked, plus a separate contacts table with per-contact provenance.",
+  "description": "A contacts table with per-contact provenance, plus the full per-domain report as the run's OUTPUT record.",
   "properties": {
-    "domainReports": {
-      "type": "string",
-      "title": "Domain Reports",
-      "description": "One row per domain. Always populated even when the domain is dead. The report contains a status block (always present), a results object with one key per ticked checkbox (contacts, ownership, subdomains, hosting, old_pages, server_tech, tracking_ids, mentions), and a coverage object explaining which sections came back complete and which had gaps.",
-      "template": "{{links.apiDefaultDatasetUrl}}/items"
-    },
     "contacts": {
       "type": "string",
-      "title": "Contacts With Provenance",
-      "description": "One row per contact per source. Emails, phones, people and organisations, each with sourceUrl, snapshotTimestamp, extractionMethod, confidence and a full sightings array. This is the evidence-grade output. Only populated when the 'Emails and phone numbers' checkbox is ticked.",
-      "template": "{{storages.datasets.contacts.apiUrl}}/items"
+      "title": "Contacts with provenance",
+      "description": "One row per contact per source: emails, phones, people and organisations with sourceUrl, snapshotTimestamp, extractionMethod, confidence and the full sightings array. People carry role, worksFor, relation (site or mention) and the evidence line. One summary row per domain closes each block with the coverage verdict.",
+      "template": "{{links.apiDefaultDatasetUrl}}/items"
+    },
+    "report": {
+      "type": "string",
+      "title": "Domain report",
+      "description": "Status, registration, DNS and hosting history with IP geolocation, certificates, archived pages, server software, tracking IDs, mentions, and a per-section coverage report saying which sources answered. A single domain gives the report itself; a batch gives { domains: [...] }.",
+      "template": "{{links.apiDefaultKeyValueStoreUrl}}/records/OUTPUT"
     }
   }
 }

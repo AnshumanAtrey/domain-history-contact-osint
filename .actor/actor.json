@@ -1,92 +1,253 @@
 {
   "actorSpecification": 1,
   "name": "domain-history-contact-osint",
-  "title": "Domain History Contact OSINT - WHOIS, DNS + Wayback Emails",
+  "title": "Domain History Contact OSINT - Previous Owner + WHOIS History",
   "version": "1.0",
   "buildTag": "latest",
-  "description": "Submit a domain, get its full history and owner contacts with a source URL on every finding. Works on dead, expired and parked domains by reading web archives, certificate transparency, RDAP and passive DNS.",
-  "categories": ["SECURITY", "DEVELOPER_TOOLS"],
+  "description": "Find who owned a domain and how to reach them, even after the site is gone. Emails, phones, people and organisations from archived pages, WHOIS history, DNS and certificate records, each with a source URL and capture date. Works on dead, expired and parked domains. One input field, 14 sources.",
+  "categories": [
+    "DEVELOPER_TOOLS",
+    "LEAD_GENERATION",
+    "OPEN_SOURCE"
+  ],
   "dockerfile": "./Dockerfile",
   "readme": "../README.md",
   "input": "./INPUT_SCHEMA.json",
   "output": "./output_schema.json",
   "minMemoryMbytes": 2048,
   "storages": {
-    "datasets": {
-      "default": {
-        "actorSpecification": 1,
-        "title": "Domain Reports",
-        "description": "One row per domain. Always populated, even for a fully dead domain. Contains a status block, results sectioned by checkbox, and a per-section coverage report.",
-        "views": {
-          "overview": {
-            "title": "Overview",
-            "transformation": {
-              "fields": [
-                "domain",
-                "status",
-                "youAskedFor",
-                "coverage",
-                "scannedAt",
-                "durationMs"
-              ]
-            },
-            "display": {
-              "component": "table",
-              "properties": {
-                "domain": { "label": "Domain", "format": "text" },
-                "status": { "label": "Status", "format": "object" },
-                "youAskedFor": { "label": "Sections", "format": "array" },
-                "coverage": { "label": "Coverage", "format": "object" },
-                "scannedAt": { "label": "Scanned", "format": "date" },
-                "durationMs": { "label": "Duration (ms)", "format": "number" }
-              }
-            }
+    "dataset": {
+      "actorSpecification": 1,
+      "title": "Contacts with provenance",
+      "description": "One row per contact per source, each with the URL and capture date that produced it, then one summary row per domain carrying the coverage verdict. The full report is the run's OUTPUT record.",
+      "fields": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "required": [
+          "type"
+        ],
+        "properties": {
+          "domain": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Domain the row belongs to"
           },
-          "coverage": {
-            "title": "Source Coverage",
-            "transformation": { "fields": ["domain", "sourcesDetail"] },
-            "display": {
-              "component": "table",
-              "properties": {
-                "domain": { "label": "Domain", "format": "text" },
-                "sourcesDetail": { "label": "Per-source Result", "format": "object" }
-              }
-            }
+          "type": {
+            "type": "string",
+            "description": "email, phone, person, organization, or summary"
+          },
+          "value": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The contact itself, or the summary line"
+          },
+          "confidence": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "high, medium or low"
+          },
+          "sourceType": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "wayback, rdap, crtsh, grepapp, whois_history, securitytrails, or report"
+          },
+          "sourceUrl": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The citable URL this row was extracted from"
+          },
+          "snapshotTimestamp": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "14-digit Wayback capture timestamp when the source is an archived page"
+          },
+          "replayUrl": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Archive replay URL for the exact capture"
+          },
+          "extractionMethod": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "How it was found: mailto-href, json-ld, ner, tel-href, rdap-field, cert-san ..."
+          },
+          "pageId": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Rows sharing a pageId were found on the same capture"
+          },
+          "occurrences": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "How many times this contact was seen"
+          },
+          "firstSeen": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "lastSeen": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "role": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Job title on the same line as a person"
+          },
+          "worksFor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Organisation named alongside a person"
+          },
+          "relation": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "site = part of the site itself; mention = named in its content"
+          },
+          "pagesSeenOn": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "snippet": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The visible line the name was read from"
+          },
+          "sightings": {
+            "type": "array",
+            "description": "Every individual observation with its own source URL, timestamp and method"
+          },
+          "status": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "reportKey": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Key-value store key holding the full report for this domain"
+          },
+          "scannedAt": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "durationMs": {
+            "type": [
+              "integer",
+              "null"
+            ]
           }
         }
       },
-      "contacts": {
-        "actorSpecification": 1,
-        "title": "Contacts With Provenance",
-        "description": "One row per contact per source. Every row carries the exact source URL, snapshot timestamp and extraction method that produced it.",
-        "views": {
-          "contacts": {
-            "title": "Contacts",
-            "transformation": {
-              "fields": [
-                "domain",
-                "type",
-                "value",
-                "confidence",
-                "sourceType",
-                "sourceUrl",
-                "snapshotTimestamp",
-                "extractionMethod",
-                "occurrences"
-              ]
-            },
-            "display": {
-              "component": "table",
-              "properties": {
-                "domain": { "label": "Domain", "format": "text" },
-                "type": { "label": "Type", "format": "text" },
-                "value": { "label": "Value", "format": "text" },
-                "confidence": { "label": "Confidence", "format": "text" },
-                "sourceType": { "label": "Source", "format": "text" },
-                "sourceUrl": { "label": "Source URL", "format": "link" },
-                "snapshotTimestamp": { "label": "Captured", "format": "text" },
-                "extractionMethod": { "label": "Method", "format": "text" },
-                "occurrences": { "label": "Seen", "format": "number" }
+      "views": {
+        "contacts": {
+          "title": "Contacts",
+          "description": "One row per contact per source. The summary row per domain says whether \"no contacts\" means checked-and-empty or a throttled source.",
+          "transformation": {
+            "fields": [
+              "domain",
+              "type",
+              "value",
+              "role",
+              "worksFor",
+              "relation",
+              "confidence",
+              "sourceType",
+              "sourceUrl",
+              "snapshotTimestamp",
+              "extractionMethod",
+              "occurrences"
+            ]
+          },
+          "display": {
+            "component": "table",
+            "properties": {
+              "domain": {
+                "label": "Domain",
+                "format": "text"
+              },
+              "type": {
+                "label": "Type",
+                "format": "text"
+              },
+              "value": {
+                "label": "Contact",
+                "format": "text"
+              },
+              "role": {
+                "label": "Role",
+                "format": "text"
+              },
+              "worksFor": {
+                "label": "Works for",
+                "format": "text"
+              },
+              "relation": {
+                "label": "Relation",
+                "format": "text"
+              },
+              "confidence": {
+                "label": "Confidence",
+                "format": "text"
+              },
+              "sourceType": {
+                "label": "Source",
+                "format": "text"
+              },
+              "sourceUrl": {
+                "label": "Source URL",
+                "format": "link"
+              },
+              "snapshotTimestamp": {
+                "label": "Captured",
+                "format": "text"
+              },
+              "extractionMethod": {
+                "label": "Method",
+                "format": "text"
+              },
+              "occurrences": {
+                "label": "Seen",
+                "format": "number"
               }
             }
           }

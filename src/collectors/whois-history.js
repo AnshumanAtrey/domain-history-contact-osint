@@ -1,5 +1,5 @@
 /**
- * WHOIS history via Whoxy API (BYOK — bring your own key).
+ * WHOIS history via Whoxy API (BYOK - bring your own key).
  *
  * Whoxy costs $0.005 per history lookup with data from November 2012.
  * No monthly fee, no charge when no records found. JSON API at:
@@ -8,7 +8,7 @@
  * This is the only affordable way to get pre-GDPR registrant names,
  * addresses and emails for expired domains. After May 2018, ICANN let
  * registrars redact everything, so the only surviving copy of the
- * registrant's name is the WHOIS history — and no free/open-source
+ * registrant's name is the WHOIS history - and no free/open-source
  * alternative exists for that.
  *
  * When no API key is provided this collector is skipped silently, so
@@ -91,7 +91,7 @@ export async function fetchWhoisHistory(domain, apiKey, contacts) {
     for (const rec of records) {
       const ts = rec.queryDate ? rec.queryDate.replace(/[^0-9]/g, '').slice(0, 14) : null;
 
-      // Registrant contacts — the gold: pre-GDPR names + emails
+      // Registrant contacts - the gold: pre-GDPR names + emails
       if (rec.registrant.email && !isPrivacyGuard(rec.registrant.email)) {
         contacts.add({
           type: 'email', value: rec.registrant.email.toLowerCase(),
@@ -133,7 +133,7 @@ export async function fetchWhoisHistory(domain, apiKey, contacts) {
         });
       }
 
-      // Admin contacts — often the real person behind a privacy-guarded registrant
+      // Admin contacts - often the real person behind a privacy-guarded registrant
       if (rec.admin.email && !isPrivacyGuard(rec.admin.email) && rec.admin.email !== rec.registrant.email) {
         contacts.add({
           type: 'email', value: rec.admin.email.toLowerCase(),
@@ -181,7 +181,7 @@ export async function fetchWhoisHistory(domain, apiKey, contacts) {
 }
 
 /**
- * WHOIS privacy guard strings — registrars and privacy services use these
+ * WHOIS privacy guard strings - registrars and privacy services use these
  * as placeholder values when the real registrant is hidden. Extracting
  * "REDACTED FOR PRIVACY" as a person name would be absurd.
  */

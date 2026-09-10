@@ -85,12 +85,10 @@ const needWhoisHistory = (want('ownership') || want('contacts')) && !!whoisHisto
 const needSecurityTrails = (want('ownership') || want('hosting') || want('contacts')) && !!securityTrailsApiKey;
 
 if (!domains.length) {
-  await Actor.pushData({
-    domain: null,
-    status: { state: 'invalid_input', plainEnglish: 'No valid domain found in the input. Enter a domain like example.com, one per line.' },
-    error: 'No valid domain found in the input. Enter a domain like example.com, one per line.',
-    scannedAt: new Date().toISOString(),
-  });
+  const msg = 'No valid domain found in the input. Enter a domain like example.com, one per line.';
+  const scannedAt = new Date().toISOString();
+  await Actor.setValue('OUTPUT', { domain: null, status: { state: 'invalid_input', plainEnglish: msg }, error: msg, scannedAt });
+  await Actor.pushData({ type: 'summary', domain: null, value: msg, status: 'invalid_input', scannedAt });
   log.warning('No valid domains in input.');
   await Actor.exit();
 }
@@ -98,7 +96,16 @@ if (!domains.length) {
 log.info(`Scanning ${domains.length} domain(s) at depth "${depth}" (up to ${pageCap} archived pages each)`);
 log.info(`Sections: ${[...sections].join(', ')}`);
 
-const contactsDataset = await Actor.openDataset('contacts');
+/**
+ * Output layout. The default dataset is the contacts table: one row per contact
+ * per source, then one summary row per domain, so a run is never empty. The full
+ * report (registration, DNS and hosting history, certificates, archived pages,
+ * tracking IDs, mentions, coverage) is the run's OUTPUT record - Console shows it
+ * on the Output tab - and REPORT-<domain> for multi-domain runs. No named storages
+ * are opened, so the Actor runs under limited permissions, which Store search and
+ * the MCP index require before a new Actor has usage.
+ */
+const reports = [];
 let browser = null;
 let browserUnavailable = false;
 
@@ -193,7 +200,7 @@ for (const domain of domains) {
     ? await sources.run('securitytrails_whois', 'SecurityTrails WHOIS history', () => fetchStWhoisHistory(domain, securityTrailsApiKey, want('contacts') ? contacts : null))
     : await sources.run('securitytrails_whois', 'SecurityTrails WHOIS history', null, { skipIf: securityTrailsApiKey ? 'Section not selected' : 'No SecurityTrails API key' });
 
-  // IP geolocation — free, no key, enriches the historical IPs we already found
+  // IP geolocation - free, no key, enriches the historical IPs we already found
   const ipGeo = (want('hosting') && pdns?.historicalIps?.length)
     ? await sources.run('ip_geolocation', 'IP geolocation (ip-api.com)', () => geolocateIps(pdns.historicalIps))
     : await sources.run('ip_geolocation', 'IP geolocation (ip-api.com)', null, { skipIf: want('hosting') ? 'No historical IPs to geolocate' : 'Section not selected' });
@@ -454,7 +461,7 @@ for (const domain of domains) {
       };
 
       // For person/org types, the structured metadata (role, worksFor, url, sameAs)
-      // may come from any sighting — JSON-LD on page 17 might have worksFor while
+      // may come from any sighting - JSON-LD on page 17 might have worksFor while
       // page 1 (processed first) only had the heuristic. Scan ALL sightings and
       // keep the first non-null value for each field.
       if (r.type === 'person' || r.type === 'organization') {
@@ -493,7 +500,7 @@ for (const domain of domains) {
           || (r.type === 'person' ? (pages >= 3 || !!merged.role) : (pages >= Math.min(3, pagesFetched) && pages >= pagesFetched / 2))
           ? 'site' : 'mention';
       } else {
-        // email / phone — context is a plain string (surrounding text, @type)
+        // email / phone - context is a plain string (surrounding text, @type)
         const contextStr = Array.isArray(primary.context)
           ? primary.context.join(', ')
           : (typeof primary.context === 'string' ? primary.context : null);
@@ -512,8 +519,20 @@ for (const domain of domains) {
       relationExplained: 'site = part of the site itself: declared in its structured data, or (people) seen on 3+ pages or carrying a job title, or (organisations) present on at least half the pages, as a footer name is. mention = appears in the site\'s content, such as a company named in an article or a biography.',
       items,
     };
-    // Push provenance rows to the contacts dataset
-    if (rows.length) await contactsDataset.pushData(rows);
+    // Provenance rows are the dataset. One row is one citable claim. People and
+    // organisations also carry role, employer, relation and the evidence line, so
+    // the table alone answers "who ran this" without opening the report.
+    const byKey = new Map(items.map((i) => [`${i.type}|${i.value.toLowerCase()}`, i]));
+    for (const row of rows) {
+      const i = byKey.get(`${row.type}|${row.value.toLowerCase()}`);
+      if (i && (row.type === 'person' || row.type === 'organization')) {
+        Object.assign(row, {
+          role: i.role ?? null, worksFor: i.worksFor ?? null, relation: i.relation ?? null,
+          pagesSeenOn: i.pagesSeenOn ?? null, snippet: i.snippet ?? null,
+        });
+      }
+    }
+    if (rows.length) await Actor.pushData(rows);
 
     const contactSources = ['wayback_pages', 'rdap', 'grepapp', 'crtsh', 'whois_history', 'securitytrails_whois'];
     const relevant = sources.toArray().filter((s) => contactSources.includes(s.source));
@@ -521,7 +540,7 @@ for (const domain of domains) {
     coverage.contacts = {
       status: anyFailed ? 'incomplete' : 'complete',
       note: anyFailed
-        ? 'Some sources were unreachable. Missing contacts here are UNKNOWN, not absent — re-run later.'
+        ? 'Some sources were unreachable. Missing contacts here are UNKNOWN, not absent - re-run later.'
         : (summary.total ? null : 'All sources responded, genuinely no contacts found.'),
     };
   }
@@ -552,7 +571,7 @@ for (const domain of domains) {
       }
       : { status: 'unavailable', plainEnglish: 'RDAP lookup failed or was skipped.' };
 
-    // WHOIS history — pre-GDPR registrant data
+    // WHOIS history - pre-GDPR registrant data
     if (whoisHistory?.count) {
       ownershipData.whoisHistory = {
         recordCount: whoisHistory.count,
@@ -564,7 +583,7 @@ for (const domain of domains) {
       if (rdap?.registrantRedacted || rdap?.status === 'not_registered') {
         const firstRec = whoisHistory.records.find((r) => r.registrant?.name || r.registrant?.company);
         if (firstRec) {
-          ownershipData.plainEnglish += ` WHOIS history recovered ${whoisHistory.count} record(s) — `
+          ownershipData.plainEnglish += ` WHOIS history recovered ${whoisHistory.count} record(s) - `
             + `registrant: ${firstRec.registrant.name || firstRec.registrant.company || 'unknown'}.`;
         }
       }
@@ -585,7 +604,7 @@ for (const domain of domains) {
       if (!ownershipData.whoisHistory?.recordCount && (rdap?.registrantRedacted || rdap?.status === 'not_registered')) {
         const firstRec = stWhois.records.find((r) => r.registrant?.name || r.registrant?.organization);
         if (firstRec) {
-          ownershipData.plainEnglish += ` SecurityTrails recovered ${stWhois.count} WHOIS record(s) — `
+          ownershipData.plainEnglish += ` SecurityTrails recovered ${stWhois.count} WHOIS record(s) - `
             + `registrant: ${firstRec.registrant.name || firstRec.registrant.organization || 'unknown'}.`;
         }
       }
@@ -719,7 +738,7 @@ for (const domain of domains) {
         openIt: wayback.replayUrl(s.timestamp, s.original, 'mp_'),
       })),
       plainEnglish: pagesBlocked
-        ? `archive.org blocked or throttled ${pagesBlocked} page fetch(es). Missing data here is UNKNOWN, not absent — re-run later.`
+        ? `archive.org blocked or throttled ${pagesBlocked} page fetch(es). Missing data here is UNKNOWN, not absent - re-run later.`
         : (pagesFetched
           ? `${pagesFetched} archived pages recovered, covering ${[...new Set(stamps.map((t) => t.slice(0, 4)))].join(', ')}.`
           : 'No archived pages found for this domain.'),
@@ -749,7 +768,7 @@ for (const domain of domains) {
     };
     coverage.server_tech = {
       status: originServers.size || !pagesBlocked ? 'complete' : 'incomplete',
-      note: originServers.size ? null : (pagesBlocked ? 'Some pages were blocked — server info may exist but could not be read.' : 'checked and genuinely empty'),
+      note: originServers.size ? null : (pagesBlocked ? 'Some pages were blocked - server info may exist but could not be read.' : 'checked and genuinely empty'),
     };
   }
 
@@ -779,7 +798,7 @@ for (const domain of domains) {
     coverage.tracking_ids = {
       status: !pagesBlocked ? 'complete' : 'incomplete',
       note: !idList.length
-        ? (pagesBlocked ? 'Pages blocked — IDs are unknown, not absent.' : 'checked and genuinely empty')
+        ? (pagesBlocked ? 'Pages blocked - IDs are unknown, not absent.' : 'checked and genuinely empty')
         : null,
     };
   }
@@ -827,7 +846,7 @@ for (const domain of domains) {
     coverage.mentions = {
       status: failedOrLimited.length ? 'incomplete' : 'complete',
       note: failedOrLimited.length
-        ? `${failedOrLimited.map((s) => s.label).join(', ')} — unreachable. This is UNKNOWN, not absent. Re-run.`
+        ? `${failedOrLimited.map((s) => s.label).join(', ')} - unreachable. This is UNKNOWN, not absent. Re-run.`
         : null,
     };
   }
@@ -841,7 +860,7 @@ for (const domain of domains) {
   report.coverage = {
     plainEnglish: completeSections === totalSections
       ? `All ${totalSections} sections came back complete.`
-      : `${completeSections} of ${totalSections} sections complete. ${totalSections - completeSections} section(s) have gaps — check the notes for which to re-run.`,
+      : `${completeSections} of ${totalSections} sections complete. ${totalSections - completeSections} section(s) have gaps - check the notes for which to re-run.`,
     bySection: coverage,
   };
 
@@ -858,11 +877,36 @@ for (const domain of domains) {
 
   report.durationMs = Date.now() - started;
 
-  await Actor.pushData(report);
+  const reportKey = `REPORT-${domain.replace(/[^A-Za-z0-9.-]/g, '_')}`;
+  await Actor.setValue(reportKey, report);
+  reports.push(report);
+  // The summary row closes this domain's block in the contacts table and carries
+  // the coverage verdict, so an investigator reading the table alone sees whether
+  // "no contacts" means checked-and-empty or a throttled source.
+  await Actor.pushData({
+    type: 'summary',
+    domain,
+    value: `${summary.total} contact(s). ${report.coverage.plainEnglish}`,
+    confidence: null,
+    sourceType: 'report',
+    sourceUrl: null,
+    snapshotTimestamp: null,
+    extractionMethod: null,
+    occurrences: summary.total,
+    firstSeen: report.status.aliveFrom,
+    lastSeen: report.status.aliveUntil,
+    status: liveStatus,
+    reportKey,
+    scannedAt: report.scannedAt,
+    durationMs: report.durationMs,
+  });
 
   log.info(`  ${domain}: ${summary.total} contacts, `
     + `${sourceCounts.ok} sources ok / ${sourceCounts.empty} empty / ${sourceCounts.failed} failed / ${sourceCounts.rate_limited} rate-limited / ${sourceCounts.skipped} skipped`);
 }
 
+// OUTPUT is what Console's Output tab renders: the report itself for the usual
+// single-domain run, the list of reports for a batch.
+await Actor.setValue('OUTPUT', reports.length === 1 ? reports[0] : { domains: reports });
 if (browser) await browser.close().catch(() => {});
 await Actor.exit();

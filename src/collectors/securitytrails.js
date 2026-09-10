@@ -1,5 +1,5 @@
 /**
- * SecurityTrails API integration (BYOK — free tier: 2500 queries/month).
+ * SecurityTrails API integration (BYOK - free tier: 2500 queries/month).
  *
  * SecurityTrails stores 3.4 trillion DNS records and 3 billion WHOIS records
  * collected daily since mid-2008. The free tier gives 2500 API calls/month,
@@ -8,7 +8,7 @@
  *   - WHOIS history with full registrant details (pre-GDPR)
  *   - Subdomain discovery
  *
- * Free signup at https://securitytrails.com — no credit card needed.
+ * Free signup at https://securitytrails.com - no credit card needed.
  * When no API key is provided, this collector is silently skipped.
  */
 
@@ -61,7 +61,7 @@ export async function fetchDnsHistory(domain, apiKey) {
     results.aError = err.message;
   }
 
-  // Fetch NS record history (nameservers over time — shows hosting providers)
+  // Fetch NS record history (nameservers over time - shows hosting providers)
   try {
     const nsHistory = await stFetch(`/history/${encodeURIComponent(domain)}/dns/ns`, apiKey);
     results.nsRecords = (nsHistory.records || []).map((r) => ({

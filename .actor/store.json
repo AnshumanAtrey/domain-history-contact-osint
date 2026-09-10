@@ -1,0 +1,36 @@
+{
+  "$comment": "Store listing fields that apify push never sends. Applied by scripts/store-metadata.mjs after every deploy. Title, description and categories live in actor.json.",
+
+  "seoTitle": "Domain History Lookup - WHOIS History + Past Owner Contacts",
+  "seoDescription": "Domain history lookup API. Find who owned a domain in the past: WHOIS history, Wayback pages, and the owner's emails, phones and names, each with a source URL and date.",
+
+  "exampleRunInput": { "domains": "theranos.com", "depth": "standard" },
+
+  "actorPermissionLevel": "LIMITED_PERMISSIONS",
+
+  "pricing": {
+    "apply": false,
+    "$comment": "PROPOSAL, not applied. Apify allows one pricing change per 30 days and the first set is the only free one, so a human flips apply to true. Start floor covers compute (measured: quick 0.10 CU, standard 0.20 CU at 2048MB); the per-row event is the contact-with-provenance the customer asked for. The summary row per domain is also a dataset item and is billed by the same event.",
+    "pricingInfos": [
+      {
+        "pricingModel": "PAY_PER_EVENT",
+        "apifyMarginPercentage": 0.2,
+        "reasonForChange": "First pricing for 1.0",
+        "pricingPerEvent": {
+          "actorChargeEvents": {
+            "apify-actor-start": {
+              "eventTitle": "Domain scan",
+              "eventDescription": "One domain, any depth. Covers the archive crawl, page rendering, the entity model, registration, DNS, certificate and reference lookups, and the coverage report.",
+              "eventPriceUsd": 0.10
+            },
+            "apify-default-dataset-item": {
+              "eventTitle": "Contact with provenance",
+              "eventDescription": "One row per contact per source: email, phone, person or organisation, with the URL and capture date that produced it. Includes one summary row per domain.",
+              "eventPriceUsd": 0.03
+            }
+          }
+        }
+      }
+    ]
+  }
+}

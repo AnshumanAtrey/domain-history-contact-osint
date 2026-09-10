@@ -55,6 +55,23 @@ People, organisations, IP geolocation, and WHOIS history — closes the TruTrace
   the same cost; fixing the threads cut the cost. Output was identical across all three runs
   and the laptop (same 40 contacts, same 4 site-level entities). Chromium rendering is now
   the largest CPU cost; archive.org fetch is 56s and outside our control.
+- **Output layout: the contacts table is the dataset.** One row per contact per source, with
+  the URL and capture date that produced it; people and organisations also carry `role`,
+  `worksFor`, `relation` and the evidence `snippet`. One summary row per domain closes each
+  block with the coverage verdict, so a run is never an empty table. The full report is the
+  run's `OUTPUT` record (Console's Output tab) and `REPORT-<domain>`. The previous layout used
+  a named `contacts` dataset, which forces full permissions - and Apify excludes low-usage
+  full-permission Actors from Store search results and from the MCP index. No named storages
+  now, so the Actor is declared with limited permissions.
+- **Store listing is deployed from the repo.** `apify push` never updates title, description,
+  SEO fields, categories, permissions or the example input on an existing Actor, so those were
+  empty on the platform. `scripts/store-metadata.mjs` runs after every deploy, validates the
+  portfolio shipping rules (title 63, seoTitle 60, seoDescription 200, description 300, no
+  em dashes, 3 categories max) and PUTs only what differs. Pricing is proposed in
+  `.actor/store.json` with `apply: false`: Apify allows one pricing change per 30 days, so a
+  human flips it. Logo lives at `.actor/logo.svg` / `.actor/logo.png`; the icon field is not
+  writable through the API and is uploaded once in Console.
+- **License is MIT** in both `LICENSE` and `package.json` (was Apache-2.0 in the latter).
 - **IP geolocation via ip-api.com (free, no key).** Every historical IP from passive DNS
   is now auto-enriched with country, city, ISP, org and AS number using the free batch
   endpoint (up to 100 IPs in a single request). Zero config — runs automatically.

@@ -263,7 +263,7 @@ const nameOf = (v) => (typeof v === 'string' ? v.trim() : str(v?.name) || str(v?
  * renders one. One pattern covers ©, (c), "Copyright", an optional year range,
  * and stops at the rights sentence in English, German, French or Spanish.
  */
-const COPYRIGHT_RE = /(?:©|\(c\)|copyright)\s*(?:\d{4}\s*(?:[-–]\s*\d{4})?\s*)?(?:by\s+)?([^\n©|]{2,90}?)\s*(?:\.|,|\||-|–|all rights|alle rechte|tous droits|todos los derechos|$)/gim;
+const COPYRIGHT_RE = /(?:©|\(c\)|copyright)\s*(?:\d{4}\s*(?:[--]\s*\d{4})?\s*)?(?:by\s+)?([^\n©|]{2,90}?)\s*(?:\.|,|\||-|-|all rights|alle rechte|tous droits|todos los derechos|$)/gim;
 
 /**
  * Declared people and organisations: JSON-LD, microdata, meta author, copyright.

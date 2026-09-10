@@ -19,7 +19,7 @@
     "contact-extraction"
   ],
   "author": "Anshuman Atrey",
-  "license": "Apache-2.0",
+  "license": "MIT",
   "dependencies": {
     "@huggingface/transformers": "^4.2.0",
     "apify": "^3.7.2",
