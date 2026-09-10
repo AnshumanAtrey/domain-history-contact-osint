@@ -81,7 +81,11 @@ report and the domain history come with the run.
 All keyless and free at the point of use: Internet Archive CDX and raw snapshot replay,
 Common Crawl index, crt.sh certificate transparency, IANA RDAP bootstrap plus registry and
 registrar RDAP, Google Public DNS, Robtex and Mnemonic passive DNS, urlscan.io, Arquivo.pt
-full-text archive search, and grep.app public code search.
+full-text archive search and its CDX archive, and grep.app public code search.
+
+Two web archives are used, not one. Arquivo.pt keeps its own captures behind a different
+rate limiter to archive.org, which is the only resource here that throttles hard, so a
+domain the Internet Archive will not serve you can still come back with pages.
 
 Paid pre-GDPR WHOIS history is deliberately not wired in yet. It is the strongest route to a
 named registrant on a dropped domain and it is on the roadmap.

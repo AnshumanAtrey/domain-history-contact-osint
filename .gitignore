@@ -5,3 +5,5 @@ storage/
 .env.local
 .DS_Store
 *.log
+runs/
+models/

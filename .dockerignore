@@ -1,0 +1,11 @@
+# The model is downloaded inside the image (see Dockerfile), never uploaded from here.
+models/
+node_modules/
+apify_storage/
+storage/
+runs/
+.git/
+*.log
+.env
+.env.local
+.DS_Store

@@ -37,32 +37,99 @@ export async function fetchUrlscan(domain) {
   };
 }
 
+/**
+ * Arquivo.pt - full-text mentions of the domain, plus Arquivo's OWN archive of it.
+ *
+ * Two hard-won details, both verified live.
+ *
+ * 1. QUERY SHAPE. textsearch 400s on a bare url-shaped query ("please use the CDX
+ *    server API to search for URLs"). The original workaround was to strip the TLD
+ *    and search the brand token - which is catastrophic when the brand token is an
+ *    ordinary word. Measured on emojis.cafe: q=emojis returned 10 results out of an
+ *    estimated 1,825,447, and ZERO of them mentioned the domain. The report filled
+ *    with Bitmoji tutorials and Portuguese news, and scored the source "ok".
+ *    QUOTING the FQDN bypasses the URL rejection and searches the literal string.
+ *    Measured: q="theranos.com" -> 10 items, 10 of 10 mention the domain (100%
+ *    precision vs 0%); q="emojis.cafe" -> 0 items, an honest empty.
+ *
+ * 2. The 400 message names the right endpoint for the other half of the job. The
+ *    CDX API returns Arquivo's own archived captures, which is a SECOND web archive
+ *    behind a different rate limiter than archive.org - the one resource this actor
+ *    actually contends for. Verified: theranos.com returns real captures there.
+ *
+ * Results are gated on actually containing the domain, and anything that does not
+ * is counted in `discarded` rather than quietly dropped.
+ */
 export async function fetchArquivo(domain) {
-  // Arquivo REJECTS url-shaped queries on textsearch by design - verified live, it
-  // 400s with "use the CDX server API to search for URLs". So search the brand
-  // token instead of the FQDN, which is the better investigative query anyway:
-  // it finds pages that TALKED ABOUT the entity, not pages that linked to it.
-  const brand = domain.replace(/^www\./, '').split('.')[0];
-  const url = `https://arquivo.pt/textsearch?q=${encodeURIComponent(brand)}&maxItems=50`;
-  // Full-text search across ~108M archived pages is genuinely slow and sometimes
-  // times out. That is reported as a source status, never as a run failure.
-  const { json } = await withRetry(() => httpGet(url, { timeoutMs: 60_000 }), { attempts: 2 });
-  const items = json?.response_items || [];
-  return {
-    count: items.length,
-    estimatedTotal: json?.estimated_nr_results ?? null,
-    queryUsed: brand,
-    sourceUrl: url,
-    references: items.slice(0, 50).map((i) => ({
+  const needle = domain.toLowerCase();
+  const phrase = `"${domain}"`;
+  const url = `https://arquivo.pt/textsearch?q=${encodeURIComponent(phrase)}&maxItems=50`;
+
+  let items = [];
+  let estimatedTotal = null;
+  let textSearchError = null;
+  try {
+    // Full-text search across ~108M archived pages is genuinely slow and sometimes
+    // times out. That is reported as a source status, never as a run failure.
+    const { json } = await withRetry(() => httpGet(url, { timeoutMs: 60_000 }), { attempts: 2 });
+    items = json?.response_items || [];
+    estimatedTotal = json?.estimated_nr_results ?? null;
+  } catch (err) { textSearchError = String(err.message).slice(0, 150); }
+
+  const mentions = items
+    .map((i) => ({
       title: i.title || null,
       originalUrl: i.originalURL || null,
       archiveUrl: i.linkToArchive || null,
       timestamp: i.tstamp || null,
       snippet: (i.snippet || '').replace(/<[^>]+>/g, '').slice(0, 300) || null,
-    })),
-    note: items.length
-      ? 'Full-text archive hits: pages whose CONTENT mentioned this domain. Each carries an archive URL you can cite.'
-      : 'No full-text archive references found. Arquivo.pt skews Portuguese-language and European crawls.',
+    }))
+    .filter((r) => `${r.title || ''} ${r.originalUrl || ''} ${r.snippet || ''} ${r.archiveUrl || ''}`
+      .toLowerCase().includes(needle));
+  const discarded = items.length - mentions.length;
+
+  // Arquivo's own captures of the domain - a second archive, separate rate limiter.
+  let captures = [];
+  let cdxError = null;
+  const cdxUrl = `https://arquivo.pt/wayback/cdx?url=${encodeURIComponent(`${domain}/*`)}&output=json&limit=200`;
+  try {
+    const { body } = await withRetry(() => httpGet(cdxUrl, { timeoutMs: 45_000, raw: true }), { attempts: 2 });
+    captures = String(body).trim().split('\n').filter(Boolean)
+      .map((l) => { try { return JSON.parse(l); } catch { return null; } })
+      .filter(Boolean)
+      .map((r) => ({
+        url: r.url || null,
+        timestamp: r.timestamp || null,
+        status: r.status || null,
+        mime: r.mime || null,
+        replayUrl: r.timestamp && r.url ? `https://arquivo.pt/wayback/${r.timestamp}/${r.url}` : null,
+      }));
+  } catch (err) { cdxError = String(err.message).slice(0, 150); }
+
+  // Same rule as Common Crawl: if neither half answered, we know nothing about
+  // this domain's presence in Arquivo - that is not the same as it holding none.
+  if (textSearchError && cdxError) {
+    throw new Error(`Arquivo.pt unreachable on both full-text and CDX - data is UNKNOWN, not absent (${textSearchError})`);
+  }
+
+  return {
+    count: mentions.length + captures.length,
+    mentionCount: mentions.length,
+    captureCount: captures.length,
+    estimatedTotal,
+    queryUsed: phrase,
+    discarded,
+    discardedNote: discarded
+      ? `${discarded} full-text result(s) were returned but did not contain "${domain}", so they were dropped rather than padding the report.`
+      : null,
+    sourceUrl: url,
+    cdxSourceUrl: cdxUrl,
+    errors: [textSearchError, cdxError].filter(Boolean),
+    references: mentions.slice(0, 50),
+    captures: captures.slice(0, 100),
+    note: (mentions.length || captures.length)
+      ? 'Arquivo.pt hits. `references` are pages whose CONTENT names this domain; `captures` are Arquivo\'s own archived copies of it, which is a second archive independent of archive.org.'
+      : 'No Arquivo.pt references or captures. Arquivo skews Portuguese-language and European crawls.',
   };
 }
 
@@ -137,46 +204,89 @@ export async function fetchGrepApp(domain) {
 /**
  * Common Crawl index - a second, unrate-limited URL universe.
  *
- * Two behaviours worth encoding. First, the index server answers 404 when it
- * simply holds nothing for a domain, which is NOT a failure - reporting it as one
- * would tell the user a source broke when it actually answered "nothing here",
- * and the whole point of the coverage report is that distinction. Second, the
- * crawl id rolls forward every few weeks, so it is resolved from collinfo.json
- * rather than hardcoded, with a fallback if that lookup fails.
+ * Three behaviours worth encoding.
+ *
+ * First, the index server answers 404 when it simply holds nothing for a domain,
+ * which is NOT a failure - reporting it as one would tell the user a source broke
+ * when it actually answered "nothing here", and the whole point of the coverage
+ * report is that distinction.
+ *
+ * Second, the crawl id rolls forward every few weeks, so it is resolved from
+ * collinfo.json rather than hardcoded, with a fallback if that lookup fails.
+ *
+ * Third - and this was the real defect - Common Crawl keeps a SEPARATE index per
+ * crawl, and a crawl only contains pages that existed when it ran. Sampling
+ * "newest plus three spread evenly across all of history" asks the wrong years:
+ * measured on emojis.cafe, which lived 2024-04 to 2025-05, the actor queried
+ * CC-MAIN-2026-34, 2021-43, 2017-47 and 2008-2009 and hit none of the 20+ indexes
+ * covering its actual lifespan. So when the domain's lifespan is known - and by
+ * this point in the pipeline it is, from Wayback captures and certificate dates -
+ * the indexes are chosen from inside that window instead.
  */
 let ccIndexListCache = null;
 
-/**
- * Common Crawl keeps a separate index per crawl, and a DEAD domain only exists in
- * OLDER crawls - querying just the newest one returns nothing, which would make
- * this source useless for exactly the input this actor is built for. Verified:
- * theranos.com returns 0 rows from CC-MAIN-2026-34 but 5 rows from CC-MAIN-2025-13.
- * So sample a handful of indexes spread across the available history and merge.
- */
-async function ccIndexes(limit = 4) {
+// Best-effort only, used when collinfo.json is unreachable. Spanning years matters
+// more than being exhaustive: a wrong id 404s, which is recorded as `empty`.
+const FALLBACK_INDEXES = [
+  'CC-MAIN-2026-34', 'CC-MAIN-2025-13', 'CC-MAIN-2024-33', 'CC-MAIN-2023-14',
+  'CC-MAIN-2021-43', 'CC-MAIN-2020-16', 'CC-MAIN-2017-47', 'CC-MAIN-2008-2009',
+];
+
+async function ccIndexList() {
   if (!ccIndexListCache) {
     try {
       const { json } = await httpGet('https://index.commoncrawl.org/collinfo.json', { timeoutMs: 20_000 });
-      ccIndexListCache = (json || []).map((c) => c.id).filter(Boolean);
+      const ids = (json || []).map((c) => c.id).filter(Boolean);
+      ccIndexListCache = ids.length ? { ids, viaFallback: false } : { ids: FALLBACK_INDEXES, viaFallback: true };
     } catch {
-      ccIndexListCache = ['CC-MAIN-2026-34', 'CC-MAIN-2025-13', 'CC-MAIN-2023-14', 'CC-MAIN-2020-16'];
+      ccIndexListCache = { ids: FALLBACK_INDEXES, viaFallback: true };
     }
   }
-  const all = ccIndexListCache;
-  if (all.length <= limit) return all;
-  // Newest, then evenly spaced back through history.
-  const picks = [all[0]];
-  const step = (all.length - 1) / (limit - 1);
-  for (let i = 1; i < limit; i += 1) picks.push(all[Math.min(all.length - 1, Math.round(i * step))]);
+  return ccIndexListCache;
+}
+
+/** Newest, oldest, and evenly spaced picks between them. */
+function spread(list, limit) {
+  if (list.length <= limit) return [...list];
+  const picks = [];
+  const step = (list.length - 1) / (limit - 1);
+  for (let i = 0; i < limit; i += 1) picks.push(list[Math.round(i * step)]);
   return [...new Set(picks)];
 }
 
-export async function fetchCommonCrawl(domain) {
-  const indexes = await ccIndexes();
+const indexYear = (id) => Number(/CC-MAIN-(\d{4})/.exec(id)?.[1]) || null;
+
+/**
+ * Pick indexes overlapping the domain's lifespan, with a year of slack on each
+ * side - a crawl labelled year N contains pages fetched close to the end of N-1,
+ * and a domain can outlive its last archive capture.
+ */
+function pickIndexes(all, lifespan, limit) {
+  if (!lifespan?.fromYear || !lifespan?.toYear) {
+    return { picks: spread(all, limit), strategy: 'spread_across_history' };
+  }
+  const from = lifespan.fromYear - 1;
+  const to = lifespan.toYear + 1;
+  const inLife = all.filter((id) => { const y = indexYear(id); return y && y >= from && y <= to; });
+  if (!inLife.length) return { picks: spread(all, limit), strategy: 'spread_across_history_no_lifespan_match' };
+  return { picks: spread(inLife, limit), strategy: 'matched_to_domain_lifespan' };
+}
+
+export async function fetchCommonCrawl(domain, lifespan = null) {
+  const { ids, viaFallback } = await ccIndexList();
+  const limit = lifespan?.fromYear ? 5 : 4;
+  const { picks, strategy } = pickIndexes(ids, lifespan, limit);
+
   const rows = [];
   const queried = [];
-  for (const index of indexes) {
+  const deadline = Date.now() + 120_000;   // never let a slow index server run the clock out
+
+  for (const index of picks) {
     const url = `https://index.commoncrawl.org/${index}-index?url=${encodeURIComponent(`${domain}/*`)}&output=json&limit=100`;
+    if (Date.now() > deadline) {
+      queried.push({ index, status: 'skipped', rows: 0, sourceUrl: url, error: 'index budget exhausted before this crawl was queried' });
+      continue;
+    }
     try {
       const { body } = await httpGet(url, { timeoutMs: 40_000, raw: true });
       const parsed = String(body).trim().split('\n').filter(Boolean)
@@ -196,8 +306,25 @@ export async function fetchCommonCrawl(domain) {
     }
   }
 
+  // A source that could not be reached has NOT told us the domain is absent from
+  // it. Returning count:0 here would score it "empty" - the single distinction
+  // this actor's coverage report exists to preserve. Verified live: the whole
+  // index.commoncrawl.org host was returning empty replies, and every index came
+  // back failed while the source still reported as an honest zero.
+  const answered = queried.filter((q) => q.status === 'ok' || q.status === 'empty').length;
+  if (queried.length && !answered) {
+    const reason = queried.find((q) => q.error)?.error || 'unreachable';
+    throw new Error(`Common Crawl index server unreachable across all ${queried.length} crawls queried - data is UNKNOWN, not absent (${reason})`);
+  }
+
   return {
     count: rows.length,
+    indexSelection: {
+      strategy,
+      lifespanUsed: lifespan?.fromYear ? `${lifespan.fromYear}-${lifespan.toYear}` : null,
+      indexesAvailable: ids.length,
+      indexListViaFallback: viaFallback,
+    },
     indexesQueried: queried,
     urls: rows.slice(0, 150).map((r) => ({
       ccIndex: r.ccIndex,
@@ -208,6 +335,6 @@ export async function fetchCommonCrawl(domain) {
     })),
     note: rows.length
       ? 'Common Crawl is free and unrate-limited, and its WARC records hold the original response headers and body. Byte offsets are included so bodies can be fetched directly.'
-      : `No Common Crawl records for this domain across ${queried.length} crawl indexes (${queried.map((q) => q.index).join(', ')}).`,
+      : `No Common Crawl records for this domain across ${queried.length} crawl indexes (${queried.map((q) => q.index).join(', ')}), selected by: ${strategy}.`,
   };
 }

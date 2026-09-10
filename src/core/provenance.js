@@ -77,6 +77,40 @@ export class ContactStore {
     return rec;
   }
 
+  /** Fold `dropKey` into `keepKey`: sightings, occurrences and best confidence carry over. */
+  merge(keepKey, dropKey) {
+    const k = this.entries.get(keepKey); const d = this.entries.get(dropKey);
+    if (!k || !d || k === d) return;
+    k.sightings.push(...d.sightings);
+    k.occurrences += d.occurrences;
+    const rank = { low: 0, medium: 1, high: 2 };
+    if (rank[d.confidence] > rank[k.confidence]) k.confidence = d.confidence;
+    this.entries.delete(dropKey);
+  }
+
+  /**
+   * "anshumanatrey" from a JSON-LD name field and "Anshuman Atrey" from visible
+   * text are one person: identical letters, different spacing and case. So are
+   * "Elizabeth A. Holmes" and "Elizabeth Holmes" - a middle initial is optional
+   * rendering, not a different person. Merge entries of `type` whose letters
+   * match once initials are dropped, keeping the spaced (display-worthy) form.
+   */
+  dedupeBySpelling(type) {
+    const compact = (v) => v.split(/\s+/).filter((w) => w.replace(/\W/g, '').length > 1).join('')
+      .toLowerCase().replace(/[^\p{L}\p{N}]/gu, '');
+    const seen = new Map();   // compact -> key
+    for (const [key, rec] of [...this.entries]) {
+      if (rec.type !== type) continue;
+      const c = compact(rec.value);
+      const prevKey = seen.get(c);
+      if (!prevKey) { seen.set(c, key); continue; }
+      const prev = this.entries.get(prevKey);
+      const keepKey = rec.value.includes(' ') && !prev.value.includes(' ') ? key : prevKey;
+      this.merge(keepKey, keepKey === key ? prevKey : key);
+      seen.set(c, keepKey);
+    }
+  }
+
   /** One row per contact per distinct source, ready to push to the contacts dataset. */
   toRows(domain) {
     const rows = [];

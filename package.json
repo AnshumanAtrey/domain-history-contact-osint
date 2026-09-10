@@ -1,12 +1,12 @@
 {
   "name": "domain-history-contact-osint",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "Submit a domain, get its history and owner contacts with per-contact provenance. Works on dead and expired domains.",
   "type": "module",
   "main": "src/main.js",
   "scripts": {
     "start": "node src/main.js",
-    "test": "node --test test/"
+    "test": "node --test"
   },
   "keywords": [
     "apify",
@@ -21,6 +21,7 @@
   "author": "Anshuman Atrey",
   "license": "Apache-2.0",
   "dependencies": {
+    "@huggingface/transformers": "^4.2.0",
     "apify": "^3.7.2",
     "cheerio": "^1.2.0",
     "crawlee": "^3.18.1",

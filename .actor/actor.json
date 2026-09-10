@@ -2,7 +2,7 @@
   "actorSpecification": 1,
   "name": "domain-history-contact-osint",
   "title": "Domain History Contact OSINT - WHOIS, DNS + Wayback Emails",
-  "version": "0.1",
+  "version": "1.0",
   "buildTag": "latest",
   "description": "Submit a domain, get its full history and owner contacts with a source URL on every finding. Works on dead, expired and parked domains by reading web archives, certificate transparency, RDAP and passive DNS.",
   "categories": ["SECURITY", "DEVELOPER_TOOLS"],
@@ -16,46 +16,40 @@
       "default": {
         "actorSpecification": 1,
         "title": "Domain Reports",
-        "description": "One row per domain. Always populated, even for a fully dead domain, including a per-source coverage array explaining which sources answered and which did not.",
+        "description": "One row per domain. Always populated, even for a fully dead domain. Contains a status block, results sectioned by checkbox, and a per-section coverage report.",
         "views": {
           "overview": {
             "title": "Overview",
             "transformation": {
               "fields": [
                 "domain",
-                "liveStatus",
-                "contactsFound",
-                "sourcesOk",
-                "sourcesEmpty",
-                "firstSeen",
-                "lastSeen",
-                "registrantOrg",
-                "scannedAt"
+                "status",
+                "youAskedFor",
+                "coverage",
+                "scannedAt",
+                "durationMs"
               ]
             },
             "display": {
               "component": "table",
               "properties": {
                 "domain": { "label": "Domain", "format": "text" },
-                "liveStatus": { "label": "Status", "format": "text" },
-                "contactsFound": { "label": "Contacts", "format": "number" },
-                "sourcesOk": { "label": "Sources OK", "format": "number" },
-                "sourcesEmpty": { "label": "Sources Empty", "format": "number" },
-                "firstSeen": { "label": "First Archived", "format": "text" },
-                "lastSeen": { "label": "Last Archived", "format": "text" },
-                "registrantOrg": { "label": "Registrant Org", "format": "text" },
-                "scannedAt": { "label": "Scanned", "format": "date" }
+                "status": { "label": "Status", "format": "object" },
+                "youAskedFor": { "label": "Sections", "format": "array" },
+                "coverage": { "label": "Coverage", "format": "object" },
+                "scannedAt": { "label": "Scanned", "format": "date" },
+                "durationMs": { "label": "Duration (ms)", "format": "number" }
               }
             }
           },
           "coverage": {
             "title": "Source Coverage",
-            "transformation": { "fields": ["domain", "sources"] },
+            "transformation": { "fields": ["domain", "sourcesDetail"] },
             "display": {
               "component": "table",
               "properties": {
                 "domain": { "label": "Domain", "format": "text" },
-                "sources": { "label": "Per-source Result", "format": "array" }
+                "sourcesDetail": { "label": "Per-source Result", "format": "object" }
               }
             }
           }

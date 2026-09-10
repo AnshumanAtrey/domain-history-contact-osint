@@ -23,6 +23,53 @@
       ],
       "default": "standard",
       "prefill": "standard"
+    },
+    "sections": {
+      "title": "What to include in the report",
+      "type": "array",
+      "description": "Pick which data you want. All are selected by default. Unticking 'Saved copies of the old website' makes the run ~10× faster. Unticking 'Emails and phone numbers' alone does not speed up the run because they are extracted from the same archived pages.",
+      "editor": "select",
+      "default": ["contacts", "ownership", "subdomains", "hosting", "old_pages", "server_tech", "tracking_ids", "mentions"],
+      "prefill": ["contacts", "ownership", "subdomains", "hosting", "old_pages", "server_tech", "tracking_ids", "mentions"],
+      "items": {
+        "type": "string",
+        "enum": [
+          "contacts",
+          "ownership",
+          "subdomains",
+          "hosting",
+          "old_pages",
+          "server_tech",
+          "tracking_ids",
+          "mentions"
+        ],
+        "enumTitles": [
+          "Emails and phone numbers (from archived pages, domain records, and public code)",
+          "Who registered it and when (RDAP / WHOIS domain lookup)",
+          "Subdomains and sister brands (SSL certificate transparency logs)",
+          "Where it was hosted, plus screenshots (DNS history + urlscan.io scans)",
+          "Saved copies of the old website (Wayback Machine archived pages — slowest step)",
+          "What software the server ran (from archived page response headers)",
+          "Tracking IDs linking to the owner's other sites (from archived page HTML / JS analysis)",
+          "Where else this domain is mentioned (archive full-text search + public code + Common Crawl)"
+        ]
+      },
+      "uniqueItems": true,
+      "minItems": 1
+    },
+    "whoisHistoryApiKey": {
+      "title": "Whoxy API key (WHOIS history — optional)",
+      "type": "string",
+      "description": "Pre-GDPR WHOIS records show who registered the domain before privacy rules hid everything. Get a key at https://www.whoxy.com (costs $0.005 per lookup, no monthly fee). Leave empty to skip — all other sources still run.",
+      "editor": "textfield",
+      "isSecret": true
+    },
+    "securityTrailsApiKey": {
+      "title": "SecurityTrails API key (DNS + WHOIS history — optional, free tier: 2500/month)",
+      "type": "string",
+      "description": "Dated DNS records (A, NS) and WHOIS history going back to 2008. Free signup at https://securitytrails.com — 2500 queries/month, no credit card. Leave empty to skip.",
+      "editor": "textfield",
+      "isSecret": true
     }
   },
   "required": ["domains"]
