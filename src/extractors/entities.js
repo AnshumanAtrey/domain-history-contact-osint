@@ -90,9 +90,20 @@ export async function loadNer() {
     const { pipeline, env } = await import('@huggingface/transformers');
     env.cacheDir = process.env.NER_MODEL_DIR || './models';
     env.allowRemoteModels = process.env.NER_ALLOW_DOWNLOAD === '1';
+
+    // onnxruntime sizes its thread pool from the HOST's core count; a container's
+    // cgroup CPU quota is invisible to it. Measured on Apify at 2048MB (a 0.5-core
+    // share): 1.47s per line against 12ms locally - 100x, from a dozen threads
+    // fighting over half a vCPU. Apify's contract is one CPU per 4096MB, published
+    // as APIFY_MEMORY_MBYTES, so size the pool from that. Unset locally: default.
+    const memMb = Number(process.env.APIFY_MEMORY_MBYTES);
+    const threads = memMb ? Math.max(1, Math.round(memMb / 4096)) : null;
     const t0 = Date.now();
-    nerPipeline = await pipeline('token-classification', NER_MODEL, { dtype: 'q8' });
-    log.info(`NER model ready in ${((Date.now() - t0) / 1000).toFixed(1)}s (${NER_MODEL})`);
+    nerPipeline = await pipeline('token-classification', NER_MODEL, {
+      dtype: 'q8',
+      ...(threads ? { session_options: { intraOpNumThreads: threads, interOpNumThreads: 1 } } : {}),
+    });
+    log.info(`NER model ready in ${((Date.now() - t0) / 1000).toFixed(1)}s (${NER_MODEL}${threads ? `, ${threads} thread(s) for ${memMb}MB` : ''})`);
     return nerPipeline;
   } catch (err) {
     nerFailed = true;
