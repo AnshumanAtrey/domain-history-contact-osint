@@ -41,10 +41,20 @@ People, organisations, IP geolocation, and WHOIS history — closes the TruTrace
   on 3+ distinct pages or carrying a job title, or (organisations) present on at least half
   the pages the way a footer name is. `pagesSeenOn` is exposed so the threshold is auditable.
   `snippet` carries the visible line each entity was read from.
-- **Cost measured, not assumed.** Per-page timers now log fetch / render / extraction /
-  entity time. Quick run, 30 pages: archive fetch 48s, render 22s, emails+phones 2s,
-  people+organisations 7s (summed over 3 workers, so ~2s wall-clock). The model is ~3% of
-  the run; archive.org is 60%.
+- **Cost measured on the platform, not just the laptop.** Per-page timers log fetch /
+  render / extraction / entity time, summed over the 3 parallel workers. On an M-series
+  laptop the model was ~3% of a 30-page quick run (people+orgs 6s of 77s). The first live
+  run on Apify at the 2048MB minimum told a different story: 531s total, people+orgs 679s -
+  1.47s per line against 12ms locally. Cause: onnxruntime sizes its thread pool from the
+  HOST's core count, the container's cgroup quota is invisible to it, and a dozen threads
+  fought over a half-core share while also starving Chromium (render 346s). Fix: Apify gives
+  one CPU per 4096MB and publishes `APIFY_MEMORY_MBYTES`, so `intraOpNumThreads` is
+  `round(memory / 4096)`, minimum 1; unset locally, nothing changes. Same run, same 2048MB:
+  **182s total, people+orgs 75s, render 162s, 0.10 compute units (was 0.30)**. For
+  comparison, 4096MB without the fix: 275s, 0.31 CU - doubling memory halved the time at
+  the same cost; fixing the threads cut the cost. Output was identical across all three runs
+  and the laptop (same 40 contacts, same 4 site-level entities). Chromium rendering is now
+  the largest CPU cost; archive.org fetch is 56s and outside our control.
 - **IP geolocation via ip-api.com (free, no key).** Every historical IP from passive DNS
   is now auto-enriched with country, city, ISP, org and AS number using the free batch
   endpoint (up to 100 IPs in a single request). Zero config — runs automatically.
