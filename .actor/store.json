@@ -1,20 +1,20 @@
 {
   "$comment": "Store listing fields that apify push never sends. Applied by scripts/store-metadata.mjs after every deploy. Title, description and categories live in actor.json.",
-
   "seoTitle": "Domain History Lookup - WHOIS History + Past Owner Contacts",
   "seoDescription": "Domain history lookup API. Find who owned a domain in the past: WHOIS history, Wayback pages, and the owner's emails, phones and names, each with a source URL and date.",
-
-  "exampleRunInput": { "domains": "theranos.com", "depth": "standard" },
-
+  "exampleRunInput": {
+    "domains": "theranos.com",
+    "depth": "quick"
+  },
   "actorPermissionLevel": "LIMITED_PERMISSIONS",
-
+  "isPublic$comment": "Publication is declared here so GitHub governs it like every other listing field. Published 2026-09-11 (v1.0). To unpublish, set false and push.",
+  "isPublic": true,
   "defaultRunOptions$comment": "2 GB is efficient since the ONNX thread cap (Standard scan 351s, 0.195 CU). Memory x timeout is the compute ceiling the start fee must cover: 2 GB x 1800 s = 1 CU = $0.20 at the developer rate. A user who raises memory pays the start fee per GB, which scales with the higher ceiling. Apify rejects unknown keys inside this object, so the comment lives here.",
   "defaultRunOptions": {
     "build": "latest",
     "memoryMbytes": 2048,
     "timeoutSecs": 1800
   },
-
   "pricing": {
     "apply": true,
     "$comment": "First-time set, applied by CI when the platform has no pricing yet; afterwards Apify allows one change per 30 days, so later changes go through Console. Sizing: developer cost is $0.20 per CU (measured $0.205 on five runs); Quick scan $0.02, Standard $0.04, ceiling at the 2 GB / 1800 s defaults $0.20. The start event bills once per GB: 2 x $0.125 = $0.25 per run at defaults, of which the developer keeps 80% = $0.20, so a run that hits the full ceiling with nothing found still breaks even (the nmap lesson). Contacts and mentions are priced apart so a big corporate archive with 140 named universities does not cost the user $4 in mention rows. Do not add apify-default-dataset-item: rows are charged by the contact and mention events from code, and the summary row is free.",

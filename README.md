@@ -59,7 +59,7 @@ The summary row is free.
 
 ### Typical scan costs
 
-Row counts measured on the platform at Standard depth; prices at the default 2 GB:
+Row counts measured on the platform at Standard depth (Quick, the default, finds most of the same contacts from fewer pages); prices at the default 2 GB:
 
 - Small dead site (youthgrowyouth.in): 6 contacts + 36 mentions, **$0.44**
 - Sparse result (yikyakapp.com): 3 contacts, no mentions, **$0.31**
@@ -73,7 +73,7 @@ A Quick run takes about 3 minutes at 2 GB and Standard about 6; raising memory t
 | Field | Required | What it does |
 |---|---|---|
 | `domains` | Yes | One domain, or several, one per line. Full URLs and `www.` are cleaned automatically |
-| `depth` | No | `quick` (about 30 archived pages), `standard` (about 120, the default), `deep` (up to 500) |
+| `depth` | No | `quick` (about 30 archived pages, about 3 minutes, the default), `standard` (about 120), `deep` (up to 500) |
 | `sections` | No | Which of the 8 report sections to build. All are ticked by default. Unticking "Saved copies of the old website" makes the run about 10x faster |
 | `securityTrailsApiKey` | No | Dated DNS history and WHOIS history back to 2008. Free tier: 2,500 queries a month, no card |
 | `whoisHistoryApiKey` | No | Whoxy WHOIS history from 2012 at $0.005 per lookup. Pre-GDPR registrant names, emails and phones |

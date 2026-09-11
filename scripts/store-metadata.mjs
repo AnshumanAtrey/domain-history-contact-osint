@@ -56,6 +56,7 @@ const desired = {
   seoTitle: store.seoTitle,
   seoDescription: store.seoDescription,
   actorPermissionLevel: store.actorPermissionLevel,
+  isPublic: store.isPublic,
   exampleRunInput: store.exampleRunInput
     ? { body: JSON.stringify(store.exampleRunInput), contentType: 'application/json; charset=utf-8' }
     : undefined,

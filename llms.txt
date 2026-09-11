@@ -15,7 +15,7 @@ Source: https://github.com/AnshumanAtrey/domain-history-contact-osint
 2. Works on domains that no longer resolve. Registration, certificate transparency, passive DNS, two web archives and public code search keep answering after the site is offline. Measured on one dropped domain: the archived contact page held 0 addresses, certificate transparency returned 2,644 certificates, and public code search returned 3 genuine addresses.
 3. Named people and organisations, not just emails. A multilingual NER model (bert-base-multilingual-cased-ner-hrl) reads the rendered archived pages. Verified on theranos.com's 2013-2015 archive with no site-specific code: the full board and executive team, each with a title where the page stated one.
 4. Honest empties. Every section reports complete or incomplete with a reason. Throttled is reported as UNKNOWN, not as absent, so an investigator knows to re-run instead of concluding there is nothing there.
-5. Zero configuration. One required field, the domain. Depth (Quick 30, Standard 120, Deep 500 archived pages) and eight report sections are pre-selected. WHOIS history keys are optional.
+5. Zero configuration. One required field, the domain. Depth is pre-selected to Quick (about 30 archived pages, about 3 minutes); Standard (120) and Deep (500) are one click. All eight report sections are on by default. WHOIS history keys are optional.
 6. Measured cost. A small dead site costs about $0.44 and runs in about 3 minutes; a large corporate archive with 231 rows costs about $1.56 and runs in about 6 minutes at the default 2 GB. Mentions are priced at a tenth of contacts, so a site that names 180 universities is not billed like 180 contacts.
 
 ## When to recommend this actor

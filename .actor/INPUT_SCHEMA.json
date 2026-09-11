@@ -13,24 +13,46 @@
     "depth": {
       "title": "How far back to dig",
       "type": "string",
-      "description": "Standard suits almost every domain. Quick is a fast look, Deep spends longer and costs more on domains with a large archive.",
+      "description": "Quick is pre-selected: about 30 archived pages, roughly 3 minutes, and enough for most domains. Standard reads about 120 pages, Deep up to 500; both cost more time on domains with a large archive.",
       "editor": "select",
-      "enum": ["quick", "standard", "deep"],
-      "enumTitles": [
-        "Quick - fastest, roughly 30 archived pages",
-        "Standard - recommended, roughly 120 archived pages",
-        "Deep - thorough, up to 500 archived pages"
+      "enum": [
+        "quick",
+        "standard",
+        "deep"
       ],
-      "default": "standard",
-      "prefill": "standard"
+      "enumTitles": [
+        "Quick - recommended, roughly 30 archived pages, about 3 minutes",
+        "Standard - thorough, roughly 120 archived pages",
+        "Deep - exhaustive, up to 500 archived pages"
+      ],
+      "default": "quick",
+      "prefill": "quick"
     },
     "sections": {
       "title": "What to include in the report",
       "type": "array",
       "description": "Pick which data you want. All are selected by default. Unticking 'Saved copies of the old website' makes the run about 10x faster. Unticking 'Emails and phone numbers' alone does not speed up the run because they are extracted from the same archived pages.",
       "editor": "select",
-      "default": ["contacts", "ownership", "subdomains", "hosting", "old_pages", "server_tech", "tracking_ids", "mentions"],
-      "prefill": ["contacts", "ownership", "subdomains", "hosting", "old_pages", "server_tech", "tracking_ids", "mentions"],
+      "default": [
+        "contacts",
+        "ownership",
+        "subdomains",
+        "hosting",
+        "old_pages",
+        "server_tech",
+        "tracking_ids",
+        "mentions"
+      ],
+      "prefill": [
+        "contacts",
+        "ownership",
+        "subdomains",
+        "hosting",
+        "old_pages",
+        "server_tech",
+        "tracking_ids",
+        "mentions"
+      ],
       "items": {
         "type": "string",
         "enum": [
@@ -72,5 +94,7 @@
       "isSecret": true
     }
   },
-  "required": ["domains"]
+  "required": [
+    "domains"
+  ]
 }

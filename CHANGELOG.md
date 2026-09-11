@@ -109,6 +109,13 @@ People, organisations, IP geolocation, and WHOIS history — closes the TruTrace
   $0.021 from 2026-09-25, that the API will not let anyone cancel; the deploy workflow runs
   once on that date and the metadata script appends the decrease back to $0.02. The script
   now reconciles decreases from `store.json` on every deploy and never automates an increase.
+- **Quick is the default depth; published to the Store.** Apify's daily quality check runs
+  every public Actor with its default input and requires it to finish within 5 minutes, or
+  after 3 failing days the Actor is marked under maintenance. The default input (theranos.com
+  at Standard) took 351 s at the 2 GB default, so the pre-selected depth is now Quick: about
+  30 archived pages in about 3 minutes, which on theranos.com still returns the founder and
+  the board. Standard and Deep are one click away. Publication (`isPublic`) is declared in
+  `store.json` and applied by the same CI step as every other listing field.
 - **License is MIT** in both `LICENSE` and `package.json` (was Apache-2.0 in the latter).
 - **IP geolocation via ip-api.com (free, no key).** Every historical IP from passive DNS
   is now auto-enriched with country, city, ISP, org and AS number using the free batch
