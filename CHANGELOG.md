@@ -93,7 +93,12 @@ People, organisations, IP geolocation, and WHOIS history — closes the TruTrace
   portfolio. Memory barely moves compute (4 GB finishes in half the time for about the same
   CU) but doubles the per-GB scan fee, which is why 2 GB is the default.
   Applied by CI on first deploy (`store.json` `apply: true`); later changes go through
-  Console because Apify allows one pricing change per 30 days.
+  Console because Apify allows one pricing change per 30 days. Paid test on the platform:
+  `chargedEventCounts` came back `apify-actor-start: 2, contact: 6, mention: 34` for a run
+  that wrote 6 contact rows, 34 mention rows and one free summary row, $0.44 to the user.
+  Note for the next person who tests this: the counts settle a minute or so after the run
+  finishes; reading them the instant the run ends shows zeros for the custom events. The run
+  logs the pricing view it received at startup, so that question is answerable from the log.
 - **License is MIT** in both `LICENSE` and `package.json` (was Apache-2.0 in the latter).
 - **IP geolocation via ip-api.com (free, no key).** Every historical IP from passive DNS
   is now auto-enriched with country, city, ISP, org and AS number using the free batch
