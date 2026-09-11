@@ -126,7 +126,11 @@ let renderFailures = 0;
  */
 const RENDER_TIMEOUT_MS = 25_000;
 const PAGE_DEADLINE_MS = 150_000;
-const STAGE_BUDGET_MS = { quick: 120_000, standard: 600_000, deep: 1_200_000 };
+// Quick was 120 s at first and clipped 4 of 30 pages on a healthy WordPress site
+// (heavy pages, three workers sharing half a CPU). 180 s leaves normal Quick runs
+// untouched (measured 130-150 s on the default input) while still bounding the
+// pathological case to minutes instead of the run timeout.
+const STAGE_BUDGET_MS = { quick: 180_000, standard: 600_000, deep: 1_200_000 };
 const withTimeout = (promise, ms, label) => new Promise((resolve, reject) => {
   const timer = setTimeout(() => reject(new Error(`${label} timed out after ${Math.round(ms / 1000)}s`)), ms);
   promise.then((v) => { clearTimeout(timer); resolve(v); }, (e) => { clearTimeout(timer); reject(e); });

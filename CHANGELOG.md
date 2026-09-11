@@ -125,7 +125,8 @@ People, organisations, IP geolocation, and WHOIS history — closes the TruTrace
   bounded, two consecutive render failures relaunch the browser (killing the process if
   `close()` hangs), each page task has a 150 s deadline and can no longer take the stage
   down with it, the limiter announces any wait over 15 s and caps backoff at 120 s, and the
-  archive stage has a time budget per depth (Quick 120 s, Standard 600 s, Deep 1200 s).
+  archive stage has a time budget per depth (Quick 180 s, Standard 600 s, Deep 1200 s;
+  Quick was 120 s for one build and clipped 4 of 30 pages on a healthy heavy site).
   When the budget trips, the unfetched pages are counted in `old_pages.skippedForTime`, the
   section is marked incomplete with "not absent, not read yet", and the run still finishes
   with its summary row and report.
