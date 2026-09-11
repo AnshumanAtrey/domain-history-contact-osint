@@ -1,29 +1,19 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
-  <!--
-    Domain History Contact OSINT
-    A rewind arrow drawn as the tail of an "@": rewind the domain's history, find
-    the contact. One glyph, two flat colours, reads at 64 px.
-  -->
-  <defs>
-    <clipPath id="card"><rect x="0" y="0" width="512" height="512" rx="112" ry="112"/></clipPath>
-  </defs>
-
-  <!-- ink card -->
-  <rect width="512" height="512" rx="112" ry="112" fill="#0E1B33"/>
-
-  <!-- faint archive strata: the layers of captures behind every finding -->
-  <g clip-path="url(#card)" fill="none" stroke="#FFFFFF" stroke-opacity="0.06" stroke-width="2">
-    <path d="M-20 392 H532"/><path d="M-20 428 H532"/><path d="M-20 464 H532"/>
+  <!-- Domain History Contact OSINT. The default-favicon globe everyone reads as "a website", plus an @ badge: website to contact. Two flat colours, reads at 64 px. -->
+<rect width="512" height="512" rx="112" ry="112" fill="#0E1B33"/>
+  <g fill="none" stroke="#FFFFFF" stroke-width="22" stroke-linecap="round">
+    <circle cx="232" cy="240" r="150"/>
+    <ellipse cx="232" cy="240" rx="66" ry="150"/>
+    <path d="M 232 90 V 390"/>
+    <path d="M 82 240 H 382"/>
+    <path d="M 105.1 160 H 358.9"/>
+    <path d="M 105.1 320 H 358.9"/>
   </g>
-
-  <!-- rewind ring: 300 degrees, opening at upper-right, counter-clockwise arrowhead -->
-  <path d="M 388.9 179.3 A 152 152 0 1 0 376.9 349.3"
-        fill="none" stroke="#FFFFFF" stroke-width="40" stroke-linecap="round"/>
-  <!-- arrowhead at the ring's start, pointing back along the arc (counter-clockwise = rewind) -->
-  <path d="M 354 119 L 429 156 L 349 202 Z" fill="#F5A524" stroke="#F5A524" stroke-width="6" stroke-linejoin="round"/>
-
-  <!-- the "a" of the @: a solid dot with a stem, the contact at the centre of the history -->
-  <circle cx="256" cy="256" r="58" fill="none" stroke="#FFFFFF" stroke-width="40"/>
-  <path d="M 314 256 V 214" stroke="#FFFFFF" stroke-width="40" stroke-linecap="round"/>
-  <path d="M 314 256 V 292" stroke="#FFFFFF" stroke-width="40" stroke-linecap="round"/>
+  <circle cx="392" cy="392" r="114" fill="#0E1B33"/>
+  <circle cx="392" cy="392" r="100" fill="#F5A524"/>
+  <g fill="none" stroke="#FFFFFF" stroke-width="18" stroke-linecap="round">
+    <circle cx="392" cy="392" r="24"/>
+    <path d="M 416 370 V 414"/>
+    <path d="M 442.2 378.5 A 52 52 0 1 0 421.8 434.6"/>
+  </g>
 </svg>
