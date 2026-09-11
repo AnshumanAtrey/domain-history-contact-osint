@@ -8,9 +8,16 @@
 
   "actorPermissionLevel": "LIMITED_PERMISSIONS",
 
+  "defaultRunOptions": {
+    "$comment": "2 GB is efficient since the ONNX thread cap (Standard scan 351s, 0.195 CU). Memory x timeout is the compute ceiling the start fee must cover: 2 GB x 1800 s = 1 CU = $0.20 at the developer rate. A user who raises memory pays the start fee per GB, which scales with the higher ceiling.",
+    "build": "latest",
+    "memoryMbytes": 2048,
+    "timeoutSecs": 1800
+  },
+
   "pricing": {
-    "apply": false,
-    "$comment": "PROPOSAL, not applied. Apify allows one pricing change per 30 days and the first set is the only free one, so a human flips apply to true. Start floor covers compute (measured: quick 0.10 CU, standard 0.20 CU at 2048MB); the per-row event is the contact-with-provenance the customer asked for. The summary row per domain is also a dataset item and is billed by the same event.",
+    "apply": true,
+    "$comment": "First-time set, applied by CI when the platform has no pricing yet; afterwards Apify allows one change per 30 days, so later changes go through Console. Sizing: developer cost is $0.20 per CU (measured $0.205 on five runs); Quick scan $0.02, Standard $0.04, ceiling at the 2 GB / 1800 s defaults $0.20. The start event bills once per GB: 2 x $0.125 = $0.25 per run at defaults, of which the developer keeps 80% = $0.20, so a run that hits the full ceiling with nothing found still breaks even (the nmap lesson). Contacts and mentions are priced apart so a big corporate archive with 140 named universities does not cost the user $4 in mention rows. Do not add apify-default-dataset-item: rows are charged by the contact and mention events from code, and the summary row is free.",
     "pricingInfos": [
       {
         "pricingModel": "PAY_PER_EVENT",
@@ -19,14 +26,19 @@
         "pricingPerEvent": {
           "actorChargeEvents": {
             "apify-actor-start": {
-              "eventTitle": "Domain scan",
-              "eventDescription": "One domain, any depth. Covers the archive crawl, page rendering, the entity model, registration, DNS, certificate and reference lookups, and the coverage report.",
-              "eventPriceUsd": 0.10
+              "eventTitle": "Domain scan (per GB of memory)",
+              "eventDescription": "Charged once per GB of run memory when a scan starts: $0.25 at the default 2 GB. Covers the archive crawl, page rendering, the entity model, registration, DNS, certificate and reference lookups, and the coverage report, at any depth.",
+              "eventPriceUsd": 0.125
             },
-            "apify-default-dataset-item": {
-              "eventTitle": "Contact with provenance",
-              "eventDescription": "One row per contact per source: email, phone, person or organisation, with the URL and capture date that produced it. Includes one summary row per domain.",
-              "eventPriceUsd": 0.03
+            "contact": {
+              "eventTitle": "Contact with source",
+              "eventDescription": "One row per contact per source: an email, a phone number, a person or organisation that is part of the site, or a registrant detail from WHOIS history, certificates or public code. Each row carries the URL and capture date it came from.",
+              "eventPriceUsd": 0.02
+            },
+            "mention": {
+              "eventTitle": "Mention",
+              "eventDescription": "A person or organisation named in the site's content rather than part of the site, such as a company in a biography or a university in an article. Kept for context, priced at a tenth of a contact.",
+              "eventPriceUsd": 0.002
             }
           }
         }

@@ -413,6 +413,7 @@ for (const domain of domains) {
 
   // ── 6. Assemble the sectioned report ────────────────────────────────────
   const summary = contacts.summary();
+  let limitReached = false;
   const sourceCounts = sources.counts();
 
   // ── Status block (always present) ───────────────────────────────────────
@@ -532,7 +533,22 @@ for (const domain of domains) {
         });
       }
     }
-    if (rows.length) await Actor.pushData(rows);
+    // Pricing has two row events. A CONTACT is an email, a phone, a person or
+    // organisation that is part of the site, or anything from a registration,
+    // WHOIS-history, certificate or code source. A MENTION is a name that only
+    // appears in the site's content. Under pay-per-event, pushData(rows, event)
+    // charges each row inside the user's spend limit and writes only what was
+    // charged; on a free or local run nothing is charged and everything is written.
+    const isContact = (r) => r.type === 'email' || r.type === 'phone' || r.relation === 'site' || r.sourceType !== 'wayback';
+    const ppe = Actor.getChargingManager().getPricingInfo().isPayPerEvent;
+    for (const [event, batch] of [['contact', rows.filter(isContact)], ['mention', rows.filter((r) => !isContact(r))]]) {
+      if (!batch.length) continue;
+      const res = ppe ? await Actor.pushData(batch, event) : await Actor.pushData(batch);
+      if (res?.eventChargeLimitReached) {
+        limitReached = true;
+        log.warning(`  spend limit reached while writing ${event} rows: ${res.chargedCount} of ${batch.length} written`);
+      }
+    }
 
     const contactSources = ['wayback_pages', 'rdap', 'grepapp', 'crtsh', 'whois_history', 'securitytrails_whois'];
     const relevant = sources.toArray().filter((s) => contactSources.includes(s.source));
@@ -883,10 +899,13 @@ for (const domain of domains) {
   // The summary row closes this domain's block in the contacts table and carries
   // the coverage verdict, so an investigator reading the table alone sees whether
   // "no contacts" means checked-and-empty or a throttled source.
+  // The summary row is not charged: no event name, and the synthetic dataset-item
+  // event is deliberately absent from the pricing.
   await Actor.pushData({
     type: 'summary',
     domain,
-    value: `${summary.total} contact(s). ${report.coverage.plainEnglish}`,
+    value: `${summary.total} contact(s). ${report.coverage.plainEnglish}`
+      + (limitReached ? ' Run spending limit reached: some rows were not written. Raise the limit or re-run.' : ''),
     confidence: null,
     sourceType: 'report',
     sourceUrl: null,

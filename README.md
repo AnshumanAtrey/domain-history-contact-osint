@@ -2,7 +2,7 @@
 
 Domain history and previous owner lookup for dead, expired and parked domains. WHOIS history, Wayback Machine pages, and the owner's emails, phones, people and organisations, each with a source URL and capture date.
 
-Available as an [Apify Actor](https://apify.com/anshumanatrey/domain-history-contact-osint). $0.10 per domain scanned + $0.03 per contact row. One input field, no API key needed.
+Available as an [Apify Actor](https://apify.com/anshumanatrey/domain-history-contact-osint). $0.25 per domain scan + $0.02 per contact found. One input field, no API key needed.
 
 ---
 
@@ -29,7 +29,7 @@ You type a domain and press Start. You get who owned it and how to reach them, e
 | Source URL and capture date on every contact | Yes, on every row | No, flat arrays | One URL per value | Not applicable |
 | Named people with job titles | Yes | No | No | Registrant only, mostly redacted since 2018 |
 | Registration, certificates, passive DNS, public code | Yes | No | No | WHOIS only |
-| Price | $0.10 per domain + $0.03 per row | About $0.002 per page | $0.0035 per snapshot | $2 per 1,000 lookups (Whoxy) up to enterprise contracts (DomainTools) |
+| Price | $0.25 per scan + $0.02 per contact, $0.002 per mention | About $0.002 per page | $0.0035 per snapshot | $2 per 1,000 lookups (Whoxy) up to enterprise contracts (DomainTools) |
 | Setup | None | None | pip or self-host for the open-source ones | Account and credits |
 
 Three measurements behind that table. On one dropped domain the archived contact page held 0 addresses, while certificate transparency returned 2,644 certificates and public code search returned 3 genuine addresses: the extra sources are where dead domains still answer. The largest contact scraper on the Store (58,952 users) returns a flat array of pages next to a flat array of emails with no mapping between them, which looks like provenance and is not. And since GDPR in 2018, the registrant on current WHOIS is redacted for most domains, so a named owner comes from archived pages, certificates and WHOIS history, not from today's record.
@@ -47,20 +47,26 @@ Two open-source tools deserve a mention. [WayTrace](https://github.com/thomashou
 
 ## What does it cost?
 
-Pay-per-event:
+Pay-per-event. You pay for the scan and for what it finds; platform compute is included.
 
 | Event | Price | When it fires |
 |---|---|---|
-| `Domain scan` | $0.10 | Once per domain, at any depth. Covers the archive crawl, page rendering, the entity model, registration, DNS, certificate and reference lookups, and the coverage report |
-| `Contact with provenance` | $0.03 | Per dataset row: one row per contact per source, plus one summary row per domain |
+| `Domain scan` | $0.125 per GB of run memory, so **$0.25** at the default 2 GB | Once per domain, at any depth. Covers the archive crawl, page rendering, the entity model, registration, DNS, certificate and reference lookups, and the coverage report |
+| `Contact with source` | $0.02 | Per row that identifies someone: an email, a phone number, a person or organisation that is part of the site, or a registrant detail from WHOIS history, certificates or public code |
+| `Mention` | $0.002 | Per row naming a person or organisation that only appears in the site's content, such as a company in a biography. A tenth of a contact, kept for context |
+
+The summary row is free.
 
 ### Typical scan costs
 
-- Small dead site, Quick depth, 40 rows: **$1.33**
-- Corporate archive, Standard depth, about 180 rows: **$5.50**
-- Domain with nothing recoverable: **$0.13** (the scan plus the summary row that explains why)
+Row counts measured on the platform at Standard depth; prices at the default 2 GB:
 
-Platform compute is included in the events. A Quick run takes about 3 minutes, Standard about 6, Deep depends on how much the archive holds.
+- Small dead site (youthgrowyouth.in): 6 contacts + 36 mentions, **$0.44**
+- Sparse result (yikyakapp.com): 3 contacts, no mentions, **$0.31**
+- Large corporate archive (theranos.com, 231 rows): 47 contacts + 183 mentions, **$1.56**
+- Nothing recoverable: **$0.25**, the scan plus the free summary row that says why
+
+A Quick run takes about 3 minutes at 2 GB and Standard about 6; raising memory to 4 GB roughly halves the time and doubles the scan fee. Deep depends on how much the archive holds. Set a spending limit on the run for a hard cap; the summary row says so if it was reached.
 
 ## Which inputs does it take?
 

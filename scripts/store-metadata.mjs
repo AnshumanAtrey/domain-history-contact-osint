@@ -54,6 +54,9 @@ const desired = {
   exampleRunInput: store.exampleRunInput
     ? { body: JSON.stringify(store.exampleRunInput), contentType: 'application/json; charset=utf-8' }
     : undefined,
+  // Memory and timeout defaults are a pricing lever: the start event bills per GB
+  // and the compute ceiling is memory x timeout. Not a pricing change, so no lock.
+  defaultRunOptions: store.defaultRunOptions,
 };
 
 const problems = [];
@@ -84,7 +87,12 @@ for (const [k, v] of Object.entries(desired)) {
 
 if (store.pricing?.apply) {
   if ((live.pricingInfos || []).length) console.log('pricing: already set on the platform - not touched (30-day change limit; edit in Console)');
-  else changes.pricingInfos = store.pricing.pricingInfos;
+  else {
+    // First-time set: effective immediately (no users yet). Timestamps are stamped here
+    // so the repo holds the prices, not a date that goes stale.
+    const now = new Date().toISOString();
+    changes.pricingInfos = store.pricing.pricingInfos.map((p) => ({ createdAt: now, startedAt: now, ...p }));
+  }
 }
 
 console.log(`actor: ${actorId} (${live.id}) | live title: "${live.title}"`);
@@ -97,7 +105,15 @@ if (dryRun) { console.log('dry run - no PUT sent'); process.exit(0); }
 
 await api('PUT', `/acts/${actorId}`, changes);
 const after = await api('GET', `/acts/${actorId}`);
-const failed = Object.keys(changes).filter((k) => k !== 'pricingInfos' && JSON.stringify(after[k]) !== JSON.stringify(changes[k]));
+if (changes.pricingInfos) {
+  const ev = after.pricingInfos?.at(-1)?.pricingPerEvent?.actorChargeEvents || {};
+  console.log(`pricing applied: ${Object.entries(ev).map(([k, v]) => `${k}=$${v.eventPriceUsd}`).join(', ') || 'NOT VISIBLE - check Console'}`);
+}
+// defaultRunOptions comes back with extra server-side keys; compare only what we sent.
+const same = (k) => (k === 'defaultRunOptions'
+  ? Object.entries(changes[k]).every(([kk, vv]) => after[k]?.[kk] === vv)
+  : JSON.stringify(after[k]) === JSON.stringify(changes[k]));
+const failed = Object.keys(changes).filter((k) => k !== 'pricingInfos' && !same(k));
 if (failed.length) { console.error(`PUT accepted but these fields did not stick: ${failed.join(', ')}`); process.exit(1); }
 console.log(`updated ${Object.keys(changes).length} field(s): ${Object.keys(changes).join(', ')}`);
 console.log(`store: https://apify.com/${me.username}/${actor.name}`);

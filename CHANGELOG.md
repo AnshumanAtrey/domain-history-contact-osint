@@ -69,10 +69,31 @@ People, organisations, IP geolocation, and WHOIS history — closes the TruTrace
   SEO fields, categories, permissions or the example input on an existing Actor, so those were
   empty on the platform. `scripts/store-metadata.mjs` runs after every deploy, validates the
   portfolio shipping rules (title 63, seoTitle 60, seoDescription 200, description 300, no
-  em dashes, 3 categories max) and PUTs only what differs. Pricing is proposed in
-  `.actor/store.json` with `apply: false`: Apify allows one pricing change per 30 days, so a
-  human flips it. Logo lives at `.actor/logo.svg` / `.actor/logo.png`; the icon field is not
-  writable through the API and is uploaded once in Console.
+  em dashes, 3 categories max) and PUTs only what differs. Logo lives at `.actor/logo.svg` /
+  `.actor/logo.png`; the icon field is not writable through the API and is uploaded once in
+  Console.
+- **Pricing: pay-per-event, sized from measured cost.** Developer cost is $0.20 per compute
+  unit (Apify's FREE/BRONZE rate; measured $0.205 across five platform runs): a Quick scan
+  costs $0.02, a Standard scan $0.04. The lesson from the portfolio's nmap incident (per-record
+  pricing only, no floor, -769% margin) is that the per-run fee must cover the compute
+  ceiling, so the run defaults are set to 2 GB and 1800 s (ceiling 1 CU = $0.20) and the
+  `apify-actor-start` event, which Apify bills once per GB, is $0.125: $0.25 per scan at the
+  defaults, of which the developer keeps 80% = $0.20, break-even even on a run that hits the
+  timeout with nothing found. Rows are charged from code with two events so a corporate
+  archive naming 140 universities is not billed like 140 contacts: `contact` $0.02 (email,
+  phone, a person or organisation that is part of the site, or any registration, WHOIS
+  history, certificate or code source) and `mention` $0.002 (a name that only appears in the
+  content). The summary row is free and the synthetic dataset-item event is deliberately not
+  priced. Under pay-per-event, `Actor.pushData(rows, event)` charges within the user's spend
+  limit and writes only what was charged; the summary row says so if that happens. Three
+  Standard scans measured on the platform (4 GB, then priced at the 2 GB default): a small
+  dead site, 6 contacts + 36 mentions, $0.44 to the user on $0.044 of compute; a sparse
+  result, 3 contacts, $0.31 on $0.046; a large corporate archive, 231 rows, 47 contacts +
+  183 mentions, $1.56 on $0.038. Developer profit 72-78% of price, in line with the
+  portfolio. Memory barely moves compute (4 GB finishes in half the time for about the same
+  CU) but doubles the per-GB scan fee, which is why 2 GB is the default.
+  Applied by CI on first deploy (`store.json` `apply: true`); later changes go through
+  Console because Apify allows one pricing change per 30 days.
 - **License is MIT** in both `LICENSE` and `package.json` (was Apache-2.0 in the latter).
 - **IP geolocation via ip-api.com (free, no key).** Every historical IP from passive DNS
   is now auto-enriched with country, city, ISP, org and AS number using the free batch
