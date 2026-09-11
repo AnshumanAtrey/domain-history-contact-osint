@@ -21,6 +21,11 @@ on:
     paths-ignore:
       - '.github/**'
   workflow_dispatch:
+  schedule:
+    # One-off. A test pricing record (contact $0.021) starts 2026-09-25 03:06 UTC and the
+    # API refuses to touch it before then; this run lets the metadata step append the
+    # decrease back to $0.02 minutes after it starts. Remove this trigger after Sep 25.
+    - cron: '15 3 25 9 *'
 
 concurrency:
   group: apify-deploy-${{ github.ref }}

@@ -90,13 +90,42 @@ for (const [k, v] of Object.entries(desired)) {
   if (JSON.stringify(v) !== JSON.stringify(liveV)) changes[k] = v;
 }
 
+/* ------------------------------------------------------------------ pricing -- */
+// Platform rules, learned the hard way (all enforced by the API):
+//  - pricingInfos is append-only in time; records are never removed or edited;
+//  - at most ONE future-dated record may exist at a time;
+//  - increases, new paid events and model changes need 14 days' notice and are
+//    limited to once a month; decreases take effect immediately.
+// So the repo is the source of truth for the FIRST set and for DECREASES. An
+// increase is never automated: it is announced to users, so a human does it.
 if (store.pricing?.apply) {
-  if ((live.pricingInfos || []).length) console.log('pricing: already set on the platform - not touched (30-day change limit; edit in Console)');
-  else {
-    // First-time set: effective immediately (no users yet). Timestamps are stamped here
-    // so the repo holds the prices, not a date that goes stale.
+  const livePricing = live.pricingInfos || [];
+  const nowMs = Date.now();
+  const desiredEvents = store.pricing.pricingInfos.at(-1).pricingPerEvent.actorChargeEvents;
+  if (!livePricing.length) {
     const now = new Date().toISOString();
     changes.pricingInfos = store.pricing.pricingInfos.map((p) => ({ createdAt: now, startedAt: now, ...p }));
+  } else {
+    const future = livePricing.find((p) => new Date(p.startedAt).getTime() > nowMs);
+    const current = [...livePricing].filter((p) => new Date(p.startedAt).getTime() <= nowMs).at(-1);
+    const liveEvents = current?.pricingPerEvent?.actorChargeEvents || {};
+    const lower = []; const higher = []; const added = [];
+    for (const [name, ev] of Object.entries(desiredEvents)) {
+      if (!(name in liveEvents)) added.push(name);
+      else if (ev.eventPriceUsd < liveEvents[name].eventPriceUsd) lower.push(name);
+      else if (ev.eventPriceUsd > liveEvents[name].eventPriceUsd) higher.push(name);
+    }
+    if (!lower.length && !higher.length && !added.length) console.log('pricing: live prices match the repo');
+    else if (future) console.log(`pricing: a future record starts ${future.startedAt.slice(0, 19)}Z; the API allows only one, so nothing can be appended until then (will reconcile on the next run after it starts)`);
+    else if (higher.length || added.length) console.log(`pricing: repo asks for an increase or a new paid event (${[...higher, ...added].join(', ')}); that needs 14 days' notice and is once a month, so it is not automated - do it in Console`);
+    else {
+      const now = new Date().toISOString();
+      const rec = JSON.parse(JSON.stringify(current));
+      for (const name of lower) rec.pricingPerEvent.actorChargeEvents[name].eventPriceUsd = desiredEvents[name].eventPriceUsd;
+      rec.createdAt = now; rec.startedAt = now; rec.reasonForChange = `Price decrease to match the repo: ${lower.join(', ')}`;
+      changes.pricingInfos = [...livePricing, rec];
+      console.log(`pricing: appending a decrease for ${lower.join(', ')} (effective immediately)`);
+    }
   }
 }
 

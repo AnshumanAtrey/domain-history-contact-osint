@@ -99,6 +99,16 @@ People, organisations, IP geolocation, and WHOIS history — closes the TruTrace
   Note for the next person who tests this: the counts settle a minute or so after the run
   finishes; reading them the instant the run ends shows zeros for the custom events. The run
   logs the pricing view it received at startup, so that question is answerable from the log.
+- **Pricing-change rules, established against the API.** The pricing history is append-only
+  in time, records can never be removed or edited, and only one future-dated record may exist
+  at a time. Increases, new paid events and model changes need 14 days' notice and are limited
+  to once a month; decreases and description edits take effect immediately. On this private
+  Actor an increase was accepted 50 minutes after the first set, where the portfolio's public
+  Actors were refused 11 days after theirs, so the monthly lock appears to attach to public or
+  in-use Actors; Apify does not document that. The test left one scheduled record, contact
+  $0.021 from 2026-09-25, that the API will not let anyone cancel; the deploy workflow runs
+  once on that date and the metadata script appends the decrease back to $0.02. The script
+  now reconciles decreases from `store.json` on every deploy and never automates an increase.
 - **License is MIT** in both `LICENSE` and `package.json` (was Apache-2.0 in the latter).
 - **IP geolocation via ip-api.com (free, no key).** Every historical IP from passive DNS
   is now auto-enriched with country, city, ISP, org and AS number using the free batch
