@@ -1,19 +1,21 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
-  <!-- Domain History Contact OSINT. The default-favicon globe everyone reads as "a website", plus an @ badge: website to contact. Two flat colours, reads at 64 px. -->
-<rect width="512" height="512" rx="112" ry="112" fill="#0E1B33"/>
+  <!-- Domain History Contact OSINT. The default-favicon globe everyone reads as "a website",
+       under a magnifying glass: investigation. Two flat colours, reads at 64 px. -->
+  <rect width="512" height="512" rx="112" ry="112" fill="#0E1B33"/>
+
+  <!-- globe -->
   <g fill="none" stroke="#FFFFFF" stroke-width="22" stroke-linecap="round">
-    <circle cx="232" cy="240" r="150"/>
-    <ellipse cx="232" cy="240" rx="66" ry="150"/>
-    <path d="M 232 90 V 390"/>
-    <path d="M 82 240 H 382"/>
-    <path d="M 105.1 160 H 358.9"/>
-    <path d="M 105.1 320 H 358.9"/>
+    <circle cx="222" cy="230" r="140"/>
+    <ellipse cx="222" cy="230" rx="62" ry="140"/>
+    <path d="M 222 90 V 370"/>
+    <path d="M 82 230 H 362"/>
+    <path d="M 103.8 155 H 340.2"/>
+    <path d="M 103.8 305 H 340.2"/>
   </g>
-  <circle cx="392" cy="392" r="114" fill="#0E1B33"/>
-  <circle cx="392" cy="392" r="100" fill="#F5A524"/>
-  <g fill="none" stroke="#FFFFFF" stroke-width="18" stroke-linecap="round">
-    <circle cx="392" cy="392" r="24"/>
-    <path d="M 416 370 V 414"/>
-    <path d="M 442.2 378.5 A 52 52 0 1 0 421.8 434.6"/>
-  </g>
+
+  <!-- magnifying glass: navy knockout so the lens separates from the globe lines, glass tint, amber ring, handle -->
+  <circle cx="352" cy="352" r="102.0" fill="none" stroke="#0E1B33" stroke-width="26"/>
+  <circle cx="352" cy="352" r="78" fill="#FFFFFF" fill-opacity="0.07"/>
+  <circle cx="352" cy="352" r="78" fill="none" stroke="#F5A524" stroke-width="24"/>
+  <path d="M 417.1 417.1 L 438.3 438.3" stroke="#F5A524" stroke-width="32" stroke-linecap="round"/>
 </svg>
