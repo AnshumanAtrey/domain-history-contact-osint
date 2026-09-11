@@ -25,8 +25,13 @@ const token = process.env.APIFY_TOKEN;
 const dryRun = process.argv.includes('--dry-run');
 if (!token) { console.error('APIFY_TOKEN is not set'); process.exit(1); }
 
-const actor = JSON.parse(readFileSync('.actor/actor.json', 'utf8'));
-const store = JSON.parse(readFileSync('.actor/store.json', 'utf8'));
+// Apify's schema validation rejects unknown keys anywhere in the body, and one bad
+// value rejects the whole PUT. Strip every "$comment" (at any depth) before sending.
+const stripComments = (v) => (Array.isArray(v) ? v.map(stripComments)
+  : v && typeof v === 'object' ? Object.fromEntries(Object.entries(v).filter(([k]) => !k.includes('$comment')).map(([k, x]) => [k, stripComments(x)]))
+    : v);
+const actor = stripComments(JSON.parse(readFileSync('.actor/actor.json', 'utf8')));
+const store = stripComments(JSON.parse(readFileSync('.actor/store.json', 'utf8')));
 
 async function api(method, path, body) {
   const res = await fetch(`${API}${path}`, {

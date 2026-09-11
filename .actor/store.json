@@ -8,8 +8,8 @@
 
   "actorPermissionLevel": "LIMITED_PERMISSIONS",
 
+  "defaultRunOptions$comment": "2 GB is efficient since the ONNX thread cap (Standard scan 351s, 0.195 CU). Memory x timeout is the compute ceiling the start fee must cover: 2 GB x 1800 s = 1 CU = $0.20 at the developer rate. A user who raises memory pays the start fee per GB, which scales with the higher ceiling. Apify rejects unknown keys inside this object, so the comment lives here.",
   "defaultRunOptions": {
-    "$comment": "2 GB is efficient since the ONNX thread cap (Standard scan 351s, 0.195 CU). Memory x timeout is the compute ceiling the start fee must cover: 2 GB x 1800 s = 1 CU = $0.20 at the developer rate. A user who raises memory pays the start fee per GB, which scales with the higher ceiling.",
     "build": "latest",
     "memoryMbytes": 2048,
     "timeoutSecs": 1800

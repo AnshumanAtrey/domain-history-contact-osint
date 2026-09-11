@@ -8,7 +8,7 @@
   "categories": [
     "DEVELOPER_TOOLS",
     "LEAD_GENERATION",
-    "OPEN_SOURCE"
+    "OTHER"
   ],
   "dockerfile": "./Dockerfile",
   "readme": "../README.md",
