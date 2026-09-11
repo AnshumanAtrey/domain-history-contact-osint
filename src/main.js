@@ -95,6 +95,13 @@ if (!domains.length) {
 
 log.info(`Scanning ${domains.length} domain(s) at depth "${depth}" (up to ${pageCap} archived pages each)`);
 log.info(`Sections: ${[...sections].join(', ')}`);
+// What the SDK believes about pricing for THIS run. The platform does not bill the
+// owner's own runs, and a paid test showed custom events not charging, so this line
+// is how the difference between "owner run" and "SDK bug" gets settled from the log.
+{
+  const p = Actor.getChargingManager().getPricingInfo();
+  log.info(`Pricing seen by the run: model=${p.pricingModel || 'none'} payPerEvent=${p.isPayPerEvent} events=${Object.keys(p.perEventPrices || {}).join(',') || '-'} maxTotalChargeUsd=${p.maxTotalChargeUsd}`);
+}
 
 /**
  * Output layout. The default dataset is the contacts table: one row per contact
@@ -540,10 +547,11 @@ for (const domain of domains) {
     // charges each row inside the user's spend limit and writes only what was
     // charged; on a free or local run nothing is charged and everything is written.
     const isContact = (r) => r.type === 'email' || r.type === 'phone' || r.relation === 'site' || r.sourceType !== 'wayback';
-    const ppe = Actor.getChargingManager().getPricingInfo().isPayPerEvent;
     for (const [event, batch] of [['contact', rows.filter(isContact)], ['mention', rows.filter((r) => !isContact(r))]]) {
       if (!batch.length) continue;
-      const res = ppe ? await Actor.pushData(batch, event) : await Actor.pushData(batch);
+      // pushData(rows, event) is safe under every pricing model: when the SDK sees a
+      // non-PPE run it writes everything and charges nothing, with no warning.
+      const res = await Actor.pushData(batch, event);
       if (res?.eventChargeLimitReached) {
         limitReached = true;
         log.warning(`  spend limit reached while writing ${event} rows: ${res.chargedCount} of ${batch.length} written`);
