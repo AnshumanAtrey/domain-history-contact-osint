@@ -115,6 +115,22 @@ log.info(`Sections: ${[...sections].join(', ')}`);
 const reports = [];
 let browser = null;
 let browserUnavailable = false;
+let renderFailures = 0;
+
+/**
+ * Time bounds. A live run hung for 15 minutes at 0% CPU after "30 sampled": a
+ * promise that never settled, with every worker behind it. Nothing in the page
+ * pipeline may wait unbounded again: every Playwright call has a timeout, every
+ * page task has a deadline, and the archive stage has a budget per depth so a
+ * Quick run always finishes inside the platform's 5-minute quality check.
+ */
+const RENDER_TIMEOUT_MS = 25_000;
+const PAGE_DEADLINE_MS = 150_000;
+const STAGE_BUDGET_MS = { quick: 120_000, standard: 600_000, deep: 1_200_000 };
+const withTimeout = (promise, ms, label) => new Promise((resolve, reject) => {
+  const timer = setTimeout(() => reject(new Error(`${label} timed out after ${Math.round(ms / 1000)}s`)), ms);
+  promise.then((v) => { clearTimeout(timer); resolve(v); }, (e) => { clearTimeout(timer); reject(e); });
+});
 
 // One model load per process (~0.6s warm). Null when unavailable; entity
 // extraction then degrades to declared structured data and says so once.
@@ -143,27 +159,40 @@ async function renderPage(html) {
   try {
     if (!browser) {
       const { launchPlaywright } = await import('crawlee');
-      browser = await launchPlaywright({ launchOptions: { headless: true } });
+      browser = await withTimeout(launchPlaywright({ launchOptions: { headless: true } }), 60_000, 'browser launch');
+      browser.on('disconnected', () => { browser = null; });
     }
   } catch (err) {
     browserUnavailable = true;
     log.warning(`Headless rendering unavailable, continuing with raw archived bytes only: ${String(err.message).split('\n')[0]}`);
     return null;
   }
+  const current = browser;
   let page = null;
   try {
-    page = await browser.newPage();
+    page = await withTimeout(current.newPage(), 10_000, 'newPage');
     await page.setContent(html, { waitUntil: 'domcontentloaded', timeout: 15_000 });
     await page.waitForTimeout(400);
-    const [rendered, text] = await Promise.all([
+    // content() and evaluate() have no timeout of their own; a wedged renderer
+    // makes them wait forever with the CPU idle. Bound them.
+    const [rendered, text] = await withTimeout(Promise.all([
       page.content(),
       page.evaluate(() => document.body?.innerText || ''),
-    ]);
+    ]), RENDER_TIMEOUT_MS, 'render');
+    renderFailures = 0;
     return { html: rendered, text };
-  } catch {
+  } catch (err) {
+    renderFailures += 1;
+    if (renderFailures >= 2 && browser === current) {
+      // Two failures in a row means the browser itself is wedged: drop it and let
+      // the next page relaunch. Kill the process if close() will not return.
+      browser = null; renderFailures = 0;
+      log.warning(`Headless browser unresponsive (${String(err.message).split('\n')[0]}); relaunching for the next page`);
+      withTimeout(current.close(), 10_000, 'browser.close').catch(() => { try { current.process()?.kill('SIGKILL'); } catch { /* already gone */ } });
+    }
     return null;
   } finally {
-    if (page) await page.close().catch(() => {});
+    if (page) await withTimeout(page.close(), 5_000, 'page.close').catch(() => {});
   }
 }
 
@@ -289,16 +318,21 @@ for (const domain of domains) {
     ? await sources.run('commoncrawl', 'Common Crawl index', () => fetchCommonCrawl(domain, lifespan))
     : await sources.run('commoncrawl', 'Common Crawl index', null, { skipIf: 'Section not selected' });
 
-  let pagesFetched = 0; let pagesBlocked = 0; let pagesFailed = 0; let pagesRendered = 0;
+  let pagesFetched = 0; let pagesBlocked = 0; let pagesFailed = 0; let pagesRendered = 0; let pagesSkippedForTime = 0;
   const timing = { fetch: 0, render: 0, extract: 0, entities: 0 };   // ms, summed across the 3 parallel workers
   const identifiers = new Map();
   const originServers = new Set();
 
   if (needArchivePages && sampled.length) {
     const limit = pLimit(3);                       // archive.org politeness, not CPU
+    const stageStart = Date.now();
+    const stageBudgetMs = STAGE_BUDGET_MS[depth];
     await sources.run('wayback_pages', 'Archived page contents', async () => {
-      const results = await Promise.all(sampled.map((s) => limit(async () => {
+      const results = await Promise.all(sampled.map((s) => limit(() => withTimeout((async () => {
         if (limiter.isHardBlocked) { pagesBlocked += 1; return null; }
+        // Budget check before each page: pages already in flight finish (bounded
+        // by the per-page deadline); the rest are reported, not silently dropped.
+        if (Date.now() - stageStart > stageBudgetMs) { pagesSkippedForTime += 1; return null; }
         let t = performance.now();
         const page = await wayback.fetchSnapshot(s, limiter);
         timing.fetch += performance.now() - t;
@@ -386,7 +420,13 @@ for (const domain of domains) {
         }
         timing.entities += performance.now() - t;
         return true;
-      })));
+      })(), PAGE_DEADLINE_MS, `page ${s.original}`).catch((err) => {
+        // One page can fail or time out; it must never take the stage with it.
+        pagesFailed += 1;
+        log.warning(`  page abandoned: ${String(err.message).slice(0, 140)}`);
+        return null;
+      }))));
+      if (pagesSkippedForTime) log.warning(`  ${depth} time budget (${stageBudgetMs / 1000}s) reached: ${pagesSkippedForTime} of ${sampled.length} sampled pages not fetched`);
       return results.filter(Boolean);
     });
   }
@@ -749,6 +789,8 @@ for (const domain of domains) {
       renderingAvailable: !browserUnavailable,
       blocked: pagesBlocked,
       failed: pagesFailed,
+      skippedForTime: pagesSkippedForTime,
+      timeBudgetSeconds: STAGE_BUDGET_MS[depth] / 1000,
       coveringYears: [...new Set(stamps.map((t) => t.slice(0, 4)))],
       firstSeen: stamps[0] || null,
       lastSeen: stamps[stamps.length - 1] || null,
@@ -761,21 +803,25 @@ for (const domain of domains) {
           : null,
         openIt: wayback.replayUrl(s.timestamp, s.original, 'mp_'),
       })),
-      plainEnglish: pagesBlocked
+      plainEnglish: (pagesSkippedForTime
+        ? `${pagesSkippedForTime} of ${sampled.length} sampled pages were not fetched: the ${depth} time budget ran out. Re-run with Standard or Deep for the rest. `
+        : '') + (pagesBlocked
         ? `archive.org blocked or throttled ${pagesBlocked} page fetch(es). Missing data here is UNKNOWN, not absent - re-run later.`
         : (pagesFetched
           ? `${pagesFetched} archived pages recovered, covering ${[...new Set(stamps.map((t) => t.slice(0, 4)))].join(', ')}.`
-          : 'No archived pages found for this domain.'),
+          : 'No archived pages found for this domain.')),
     };
 
     const src = sources.toArray().find((s) => s.source === 'wayback_pages');
     const cdxSrc = sources.toArray().find((s) => s.source === 'wayback_cdx');
     const anyFailed = [src, cdxSrc].some((s) => s?.status === STATUS.RATE_LIMITED || s?.status === STATUS.FAILED);
     coverage.old_pages = {
-      status: pagesBlocked ? 'incomplete' : (anyFailed ? 'incomplete' : 'complete'),
-      note: pagesBlocked
-        ? `${pagesBlocked} page(s) were throttled. This is UNKNOWN, not absent.`
-        : null,
+      status: (pagesBlocked || pagesSkippedForTime) ? 'incomplete' : (anyFailed ? 'incomplete' : 'complete'),
+      note: pagesSkippedForTime
+        ? `${pagesSkippedForTime} page(s) not fetched: the ${depth} time budget was reached. Not absent, not read yet - re-run deeper.`
+        : (pagesBlocked
+          ? `${pagesBlocked} page(s) were throttled. This is UNKNOWN, not absent.`
+          : null),
     };
   }
 

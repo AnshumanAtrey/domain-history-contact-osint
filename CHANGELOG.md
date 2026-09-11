@@ -116,6 +116,19 @@ People, organisations, IP geolocation, and WHOIS history — closes the TruTrace
   30 archived pages in about 3 minutes, which on theranos.com still returns the founder and
   the board. Standard and Deep are one click away. Publication (`isPublic`) is declared in
   `store.json` and applied by the same CI step as every other listing field.
+- **Nothing waits unbounded any more.** A Quick run on theranos.com hung for 15 minutes on
+  the platform at 0% CPU after "30 sampled": a promise that never settled, with every worker
+  queued behind it, heading for the 30-minute timeout, a charged start fee and no report.
+  Two candidates fit the idle silence, and both are closed: `page.content()` and
+  `page.evaluate()` had no timeout (a wedged renderer holds them forever), and the archive
+  limiter honoured `Retry-After` up to 600 s without logging. Now every Playwright call is
+  bounded, two consecutive render failures relaunch the browser (killing the process if
+  `close()` hangs), each page task has a 150 s deadline and can no longer take the stage
+  down with it, the limiter announces any wait over 15 s and caps backoff at 120 s, and the
+  archive stage has a time budget per depth (Quick 120 s, Standard 600 s, Deep 1200 s).
+  When the budget trips, the unfetched pages are counted in `old_pages.skippedForTime`, the
+  section is marked incomplete with "not absent, not read yet", and the run still finishes
+  with its summary row and report.
 - **License is MIT** in both `LICENSE` and `package.json` (was Apache-2.0 in the latter).
 - **IP geolocation via ip-api.com (free, no key).** Every historical IP from passive DNS
   is now auto-enriched with country, city, ISP, org and AS number using the free batch

@@ -85,10 +85,17 @@ export class ArchiveLimiter {
       const now = Date.now();
       if (this.pausedUntil > now) {
         const waitMs = this.pausedUntil - now;
+        // A long pause must never be silent: a run once sat idle for minutes with
+        // nothing in the log to say why.
+        if (waitMs > 15_000 && !this.pauseAnnounced) {
+          this.pauseAnnounced = true;
+          this.log.info?.(`archive.org: waiting ${Math.round(waitMs / 1000)}s before the next request (throttle backoff)`);
+        }
         this.stats.waitedMs += waitMs;
         await sleep(Math.min(waitMs, 5_000));
         continue;
       }
+      this.pauseAnnounced = false;
       this.#refill();
       if (this.tokens >= 1) {
         this.tokens -= 1;
@@ -108,8 +115,11 @@ export class ArchiveLimiter {
     this.stats.throttles += 1;
     this.rpm = Math.max(MIN_RPM, Math.floor(this.rpm * DECREASE_FACTOR));
     this.lastAdjust = Date.now();
+    // Honour Retry-After up to two minutes. Anything longer is archive.org saying
+    // "not now"; the coverage report says UNKNOWN and the user re-runs later, which
+    // beats a 10-minute silent wait inside a run they are paying for.
     const backoff = retryAfterSec
-      ? Math.min(Math.max(retryAfterSec * 1000, 2_000), 600_000)
+      ? Math.min(Math.max(retryAfterSec * 1000, 2_000), 120_000)
       : 5_000;
     this.pausedUntil = Math.max(this.pausedUntil, Date.now() + backoff);
 
