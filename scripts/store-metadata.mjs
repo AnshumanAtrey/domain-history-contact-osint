@@ -87,7 +87,11 @@ const changes = {};
 for (const [k, v] of Object.entries(desired)) {
   if (v === undefined) continue;
   const liveV = k === 'exampleRunInput' ? live.exampleRunInput : live[k];
-  if (JSON.stringify(v) !== JSON.stringify(liveV)) changes[k] = v;
+  // defaultRunOptions comes back with its keys in a different order; compare by key.
+  const differs = k === 'defaultRunOptions'
+    ? Object.entries(v).some(([kk, vv]) => liveV?.[kk] !== vv)
+    : JSON.stringify(v) !== JSON.stringify(liveV);
+  if (differs) changes[k] = v;
 }
 
 /* ------------------------------------------------------------------ pricing -- */
