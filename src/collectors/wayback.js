@@ -13,6 +13,7 @@
  * response headers, prefixed `x-archive-orig-*`.
  */
 import { httpGet, withRetry, RateLimited, HardBlocked } from './http.js';
+import { DeadlineReached } from '../core/clock.js';
 
 const CDX = 'https://web.archive.org/cdx/search/cdx';
 const FIELDS = 'timestamp,original,statuscode,mimetype,digest';
@@ -54,6 +55,7 @@ export async function fetchSnapshots(domain, limiter, { serverLimit = 15_000, de
   const out = [];
   let resumeKey = null;
   let collapse = 'timestamp:6';
+  let failure = null;       // why the crawl stopped early, when it did
 
   for (let page = 0; page < maxPages; page += 1) {
     if (Date.now() - started > deadlineMs) break;
@@ -78,13 +80,17 @@ export async function fetchSnapshots(domain, limiter, { serverLimit = 15_000, de
       }, { limiter, label: 'cdx page' });
       if (!body.trim()) break;
       try { rows = JSON.parse(body); }
-      catch { rows = salvageJson(body); if (!rows) break; }
+      catch { rows = salvageJson(body); if (!rows) { failure = new Error('the Wayback index sent an unreadable response'); break; } }
     } catch (err) {
       if (err instanceof HardBlocked) throw err;
+      // The run's time ran out: keep the pages already read, and only fail when there are none.
+      if (err instanceof DeadlineReached) { if (out.length) break; throw err; }
+      failure = err;
       // Fall back to the cheaper collapse once, then stop paginating.
       if (collapse === 'timestamp:6') { collapse = 'urlkey'; continue; }
       break;
     }
+    failure = null;           // this page answered
 
     const stripped = stripResumeKey(rows);
     let data = stripped.rows;
@@ -99,6 +105,9 @@ export async function fetchSnapshots(domain, limiter, { serverLimit = 15_000, de
     }
     if (!resumeKey) break;
   }
+  // An index that could not be read is not an empty index: returning [] here made a failed crawl
+  // read as "this domain was never archived", and the coverage report called it complete.
+  if (!out.length && failure) throw failure;
   return out;
 }
 
@@ -124,6 +133,7 @@ export async function fetchSnapshot(snapshot, limiter) {
       error: null,
     };
   } catch (err) {
+    if (err instanceof DeadlineReached) return { snapshot, html: null, error: 'deadline', replayUrl: url };   // not read, not failed
     if (err instanceof RateLimited) { limiter.reportThrottle(err.retryAfterSec); return { snapshot, html: null, error: 'rate_limited', replayUrl: url }; }
     if (err instanceof HardBlocked) { limiter.reportRefusal(); return { snapshot, html: null, error: 'blocked', replayUrl: url }; }
     if (err.status === 404 || err.status === 410) return { snapshot, html: null, error: 'not_in_archive', replayUrl: url };

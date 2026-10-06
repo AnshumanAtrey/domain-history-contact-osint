@@ -11,6 +11,7 @@
  * both the domain and the referring page are gone.
  */
 import { httpGet, withRetry, UA } from './http.js';
+import { DeadlineReached, timeoutSignal } from '../core/clock.js';
 
 export async function fetchUrlscan(domain) {
   const url = `https://urlscan.io/api/v1/search/?q=domain%3A${encodeURIComponent(domain)}&size=100`;
@@ -65,16 +66,27 @@ export async function fetchArquivo(domain) {
   const phrase = `"${domain}"`;
   const url = `https://arquivo.pt/textsearch?q=${encodeURIComponent(phrase)}&maxItems=50`;
 
+  // The two halves share nothing and the full-text half is the slow one (60 s a try, measured
+  // 123 s for both tries on theranos.com), so they run side by side: a slow search no longer
+  // holds back the captures, and a run cut short by its time limit keeps whichever half answered.
+  // The no-op catches only stop an early rejection counting as unhandled; the awaits below handle it.
+  const cdxUrl = `https://arquivo.pt/wayback/cdx?url=${encodeURIComponent(`${domain}/*`)}&output=json&limit=200`;
+  const textP = withRetry(() => httpGet(url, { timeoutMs: 60_000 }), { attempts: 2 });
+  const cdxP = withRetry(() => httpGet(cdxUrl, { timeoutMs: 45_000, raw: true }), { attempts: 2 });
+  textP.catch(() => {});
+  cdxP.catch(() => {});
+
   let items = [];
   let estimatedTotal = null;
   let textSearchError = null;
+  let textFailure = null;
   try {
     // Full-text search across ~108M archived pages is genuinely slow and sometimes
     // times out. That is reported as a source status, never as a run failure.
-    const { json } = await withRetry(() => httpGet(url, { timeoutMs: 60_000 }), { attempts: 2 });
+    const { json } = await textP;
     items = json?.response_items || [];
     estimatedTotal = json?.estimated_nr_results ?? null;
-  } catch (err) { textSearchError = String(err.message).slice(0, 150); }
+  } catch (err) { textSearchError = String(err.message).slice(0, 150); textFailure = err; }
 
   const mentions = items
     .map((i) => ({
@@ -91,9 +103,9 @@ export async function fetchArquivo(domain) {
   // Arquivo's own captures of the domain - a second archive, separate rate limiter.
   let captures = [];
   let cdxError = null;
-  const cdxUrl = `https://arquivo.pt/wayback/cdx?url=${encodeURIComponent(`${domain}/*`)}&output=json&limit=200`;
+  let cdxFailure = null;
   try {
-    const { body } = await withRetry(() => httpGet(cdxUrl, { timeoutMs: 45_000, raw: true }), { attempts: 2 });
+    const { body } = await cdxP;
     captures = String(body).trim().split('\n').filter(Boolean)
       .map((l) => { try { return JSON.parse(l); } catch { return null; } })
       .filter(Boolean)
@@ -104,11 +116,12 @@ export async function fetchArquivo(domain) {
         mime: r.mime || null,
         replayUrl: r.timestamp && r.url ? `https://arquivo.pt/wayback/${r.timestamp}/${r.url}` : null,
       }));
-  } catch (err) { cdxError = String(err.message).slice(0, 150); }
+  } catch (err) { cdxError = String(err.message).slice(0, 150); cdxFailure = err; }
 
   // Same rule as Common Crawl: if neither half answered, we know nothing about
   // this domain's presence in Arquivo - that is not the same as it holding none.
   if (textSearchError && cdxError) {
+    if (textFailure instanceof DeadlineReached && cdxFailure instanceof DeadlineReached) throw textFailure;   // out of time, not unreachable
     throw new Error(`Arquivo.pt unreachable on both full-text and CDX - data is UNKNOWN, not absent (${textSearchError})`);
   }
 
@@ -158,7 +171,7 @@ export async function fetchGrepApp(domain) {
       method: 'tools/call',
       params: { name: 'searchGitHub', arguments: { query: `@${domain}` } },
     }),
-    signal: AbortSignal.timeout(30_000),
+    signal: timeoutSignal(30_000),
   });
   if (!res.ok) {
     const e = new Error(`HTTP ${res.status} on ${endpoint}`);

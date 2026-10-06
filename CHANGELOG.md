@@ -130,6 +130,48 @@ People, organisations, IP geolocation, and WHOIS history — closes the TruTrace
   When the budget trips, the unfetched pages are counted in `old_pages.skippedForTime`, the
   section is marked incomplete with "not absent, not read yet", and the run still finishes
   with its summary row and report.
+- **A run always finishes inside its own time limit.** Apify's quality check timed out the
+  Quick default on theranos.com three days running and put the Actor under maintenance on
+  2026-10-01 (failing run `5yFChUdz9AvXSmtY9`: 3 min 55 s between "=== theranos.com" and the
+  archive line, then the 300 s limit). The log could not say why, because no source was timed.
+  Timing each source on that domain found it: they ran strictly one after another, so 199 s
+  passed before the first archived page was read - Arquivo.pt's full-text search 123 s of it
+  (its server answers HTTP 500 after 61 s, and the retry waits for a second one), Common Crawl
+  29 s, the Wayback index 21 s, crt.sh 15 s - and the page stage after that was allowed 180 s,
+  plus 150 s more for pages already in flight. That fits in five minutes only on a day
+  Arquivo.pt happens to answer. Now:
+  - Every source starts at once, the Wayback crawl first, and the pages wait for nothing but the
+    crawl: the archive line prints 19 s into the run instead of about 170 s. Common Crawl waits
+    only for the dates it needs and runs beside the pages. Same domain, same laptop: 124 s
+    instead of 236 s, with identical results (110 dataset rows each, and the same 109 contact
+    statements, none different).
+  - A run clock (`src/core/clock.js`) reads the platform's `ACTOR_TIMEOUT_AT` and stops every
+    stage 40 s before it (a quarter of the time on runs shorter than three minutes), because a run
+    the platform stops writes nothing: the contacts table and the report are assembled last. Every
+    request, retry wait, archive cooldown and page task is capped by it, and a source that never
+    settles is given up on two seconds after it. With several domains each gets an equal share of
+    the time that is left.
+  - Whatever the clock cuts is reported as `time_limited`: unknown, not absent. It shows in the
+    sources list, the coverage notes, the contacts section and the summary row, with the advice to
+    raise the run timeout. An index that could not be read now fails instead of reading as "never
+    archived", and an empty answer that only arrived after the deadline is not trusted as empty.
+    The mentions section now says when one of Arquivo.pt's two searches did not answer, which it
+    used to hide behind "complete".
+  - Pages most likely to name people (contact, about, team, board) are read first. The sampler
+    hands them over oldest first, so a run cut short used to lose the newest pages and with them
+    the current team.
+  - Arquivo.pt's two searches run side by side, so a failing full-text search no longer holds back
+    its captures. The three page workers share one Chromium launch (the old check could start one
+    each when they arrived together; a laptop launches fast enough that it never did).
+  - Each source logs its outcome and time (`source wayback_cdx: ok (2725) in 18.6s`), so a slow
+    run explains itself.
+
+  Checked with the real Actor, Chromium and model against a scripted network. A 40 s limit cut
+  the page stage at 30 s with 9 of 30 pages read, all five contact, about, team, press and careers
+  pages among them. A Wayback index that never answers ended at 22.8 s of 30 with the report and
+  the summary row written; a source that ignores the abort, at 24.8 s of 30; every service hanging
+  at once, at 15.2 s of 20, with the free summary row as the dataset, which is all the quality
+  check needs to see.
 - **License is MIT** in both `LICENSE` and `package.json` (was Apache-2.0 in the latter).
 - **IP geolocation via ip-api.com (free, no key).** Every historical IP from passive DNS
   is now auto-enriched with country, city, ISP, org and AS number using the free batch

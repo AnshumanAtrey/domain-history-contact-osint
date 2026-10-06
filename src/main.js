@@ -21,8 +21,9 @@ import pLimit from 'p-limit';
 
 import { ArchiveLimiter } from './core/ratelimit.js';
 import { ContactStore } from './core/provenance.js';
-import { SourceRegistry, STATUS } from './core/sources.js';
-import { sampleSnapshots, dedupeByDigest, normalizePath, DEPTH_PRESETS } from './core/sampler.js';
+import { SourceRegistry, STATUS, incomplete } from './core/sources.js';
+import { sampleSnapshots, dedupeByDigest, normalizePath, readOrder, DEPTH_PRESETS } from './core/sampler.js';
+import { setDeadline, deadlineFor, msLeft, expired, cap } from './core/clock.js';
 import * as wayback from './collectors/wayback.js';
 import { fetchRdap } from './collectors/rdap.js';
 import { fetchCerts } from './collectors/crtsh.js';
@@ -95,6 +96,16 @@ if (!domains.length) {
 
 log.info(`Scanning ${domains.length} domain(s) at depth "${depth}" (up to ${pageCap} archived pages each)`);
 log.info(`Sections: ${[...sections].join(', ')}`);
+
+// The platform's hard stop for this run (ACTOR_TIMEOUT_AT, which the SDK reads; the older APIFY_
+// name is the fallback). Apify's daily quality check sets it to five minutes. A run killed there
+// writes nothing - the contacts table and the report are assembled last - so every stage stops
+// a little before it (core/clock.js) and what was found is always written.
+const platformStop = Actor.getEnv().timeoutAt?.getTime() ?? Date.parse(process.env.APIFY_TIMEOUT_AT);
+const runEnd = deadlineFor(platformStop);
+log.info(runEnd === null
+  ? 'No run time limit (local run).'
+  : `Run time limit in ${Math.round((platformStop - Date.now()) / 1000)} s; stages stop ${Math.round((platformStop - runEnd) / 1000)} s before it so the report is always written.`);
 // What the SDK believes about pricing for THIS run. The platform does not bill the
 // owner's own runs, and a paid test showed custom events not charging, so this line
 // is how the difference between "owner run" and "SDK bug" gets settled from the log.
@@ -114,6 +125,7 @@ log.info(`Sections: ${[...sections].join(', ')}`);
  */
 const reports = [];
 let browser = null;
+let browserLaunch = null;      // the one launch every worker waits on
 let browserUnavailable = false;
 let renderFailures = 0;
 
@@ -123,6 +135,13 @@ let renderFailures = 0;
  * pipeline may wait unbounded again: every Playwright call has a timeout, every
  * page task has a deadline, and the archive stage has a budget per depth so a
  * Quick run always finishes inside the platform's 5-minute quality check.
+ *
+ * Those bounds were per stage, so they could still add up past the run's own limit: the
+ * quality check's Quick run timed out on 2026-10-01 with the stages in sequence (199 s of
+ * sources before the first archived page was read, measured on the same domain) and a page
+ * stage allowed to run 180 s plus 150 s for pages already in flight. The run clock
+ * (core/clock.js) now caps every one of them: nothing waits past the run's deadline, the
+ * independent sources run side by side, and the report is written before the platform stops us.
  */
 const RENDER_TIMEOUT_MS = 25_000;
 const PAGE_DEADLINE_MS = 150_000;
@@ -135,6 +154,16 @@ const withTimeout = (promise, ms, label) => new Promise((resolve, reject) => {
   const timer = setTimeout(() => reject(new Error(`${label} timed out after ${Math.round(ms / 1000)}s`)), ms);
   promise.then((v) => { clearTimeout(timer); resolve(v); }, (e) => { clearTimeout(timer); reject(e); });
 });
+
+const ranOut = (rec) => rec?.status === STATUS.TIME_LIMITED;
+
+// A source still running when the clock is out resolves to this instead of its value, so one
+// that never settles cannot hold the report back.
+const PENDING = Symbol('pending');
+const bounded = (promise, graceMs = 2_000) => (msLeft() === Infinity ? promise : Promise.race([
+  promise,
+  new Promise((resolve) => { setTimeout(resolve, Math.max(msLeft(), 0) + graceMs, PENDING).unref(); }),
+]));
 
 // One model load per process (~0.6s warm). Null when unavailable; entity
 // extraction then degrades to declared structured data and says so once.
@@ -162,16 +191,24 @@ async function renderPage(html) {
   if (browserUnavailable) return null;
   try {
     if (!browser) {
-      const { launchPlaywright } = await import('crawlee');
-      browser = await withTimeout(launchPlaywright({ launchOptions: { headless: true } }), 60_000, 'browser launch');
-      browser.on('disconnected', () => { browser = null; });
+      // One launch for everyone. The three page workers reach this line together, and each
+      // used to start its own Chromium: three browsers sharing half a core, two never closed.
+      browserLaunch ??= (async () => {
+        const { launchPlaywright } = await import('crawlee');
+        const launched = await withTimeout(launchPlaywright({ launchOptions: { headless: true } }), 60_000, 'browser launch');
+        launched.on('disconnected', () => { if (browser === launched) { browser = null; browserLaunch = null; } });
+        browser = launched;
+        return launched;
+      })();
+      await browserLaunch;
     }
   } catch (err) {
+    if (!browserUnavailable) log.warning(`Headless rendering unavailable, continuing with raw archived bytes only: ${String(err.message).split('\n')[0]}`);
     browserUnavailable = true;
-    log.warning(`Headless rendering unavailable, continuing with raw archived bytes only: ${String(err.message).split('\n')[0]}`);
     return null;
   }
   const current = browser;
+  if (!current) return null;     // it disconnected between launching and now
   let page = null;
   try {
     page = await withTimeout(current.newPage(), 10_000, 'newPage');
@@ -190,7 +227,7 @@ async function renderPage(html) {
     if (renderFailures >= 2 && browser === current) {
       // Two failures in a row means the browser itself is wedged: drop it and let
       // the next page relaunch. Kill the process if close() will not return.
-      browser = null; renderFailures = 0;
+      browser = null; browserLaunch = null; renderFailures = 0;
       log.warning(`Headless browser unresponsive (${String(err.message).split('\n')[0]}); relaunching for the next page`);
       withTimeout(current.close(), 10_000, 'browser.close').catch(() => { try { current.process()?.kill('SIGKILL'); } catch { /* already gone */ } });
     }
@@ -200,94 +237,111 @@ async function renderPage(html) {
   }
 }
 
-for (const domain of domains) {
+for (const [index, domain] of domains.entries()) {
   const started = Date.now();
-  const sources = new SourceRegistry();
+  // Each domain gets an equal share of the time that is left, so one slow domain cannot starve the rest.
+  setDeadline(runEnd === null ? null : Math.min(runEnd, started + (runEnd - started) / (domains.length - index)));
+  const sources = new SourceRegistry({ log });
   const contacts = new ContactStore();
   const lineCache = new Map();     // visible-text line -> entities; shared nav/footer is inferred once per domain
   const limiter = new ArchiveLimiter({ log });
   log.info(`=== ${domain}`);
 
-  // ── 1. Live state ─ always runs, everything downstream branches on this ──
-  const live = await sources.run('live_dns', 'Live DNS', () => fetchLiveDns(domain));
-  const hosted = !!live?.hosted;
-  const liveStatus = live?.state || 'unknown';
-  const regionHint = domain.split('.').pop().length === 2 ? domain.split('.').pop().toUpperCase() : undefined;
-
-  // ── 2. Registration, certificates, passive DNS ──────────────────────────
-  const rdap = needRdap
-    ? await sources.run('rdap', 'RDAP registration', () => fetchRdap(domain, want('contacts') ? contacts : null))
-    : await sources.run('rdap', 'RDAP registration', null, { skipIf: 'Section not selected' });
-
-  const whoisHistory = needWhoisHistory
-    ? await sources.run('whois_history', 'WHOIS history (Whoxy)', () => fetchWhoisHistory(domain, whoisHistoryApiKey, want('contacts') ? contacts : null))
-    : await sources.run('whois_history', 'WHOIS history (Whoxy)', null, { skipIf: whoisHistoryApiKey ? 'Section not selected' : 'No Whoxy API key provided' });
-
-  const certs = needCerts
-    ? await sources.run('crtsh', 'Certificate transparency (crt.sh)', () => fetchCerts(domain, want('contacts') ? contacts : null))
-    : await sources.run('crtsh', 'Certificate transparency (crt.sh)', null, { skipIf: 'Section not selected' });
-
-  const pdns = needPassiveDns
-    ? await sources.run('passive_dns', 'Passive DNS history', () => fetchPassiveDns(domain))
-    : await sources.run('passive_dns', 'Passive DNS history', null, { skipIf: 'Section not selected' });
-
-  // SecurityTrails: DNS history + WHOIS history (BYOK, free 2500 queries/month)
-  const stDns = needSecurityTrails && want('hosting')
-    ? await sources.run('securitytrails_dns', 'SecurityTrails DNS history', () => fetchStDnsHistory(domain, securityTrailsApiKey))
-    : await sources.run('securitytrails_dns', 'SecurityTrails DNS history', null, { skipIf: securityTrailsApiKey ? 'Section not selected' : 'No SecurityTrails API key' });
-
-  const stWhois = needSecurityTrails && (want('ownership') || want('contacts'))
-    ? await sources.run('securitytrails_whois', 'SecurityTrails WHOIS history', () => fetchStWhoisHistory(domain, securityTrailsApiKey, want('contacts') ? contacts : null))
-    : await sources.run('securitytrails_whois', 'SecurityTrails WHOIS history', null, { skipIf: securityTrailsApiKey ? 'Section not selected' : 'No SecurityTrails API key' });
-
-  // IP geolocation - free, no key, enriches the historical IPs we already found
-  const ipGeo = (want('hosting') && pdns?.historicalIps?.length)
-    ? await sources.run('ip_geolocation', 'IP geolocation (ip-api.com)', () => geolocateIps(pdns.historicalIps))
-    : await sources.run('ip_geolocation', 'IP geolocation (ip-api.com)', null, { skipIf: want('hosting') ? 'No historical IPs to geolocate' : 'Section not selected' });
-
-  // ── 3. Inbound references ───────────────────────────────────────────────
-  const urlscan = needUrlscan
-    ? await sources.run('urlscan', 'urlscan.io submissions', () => fetchUrlscan(domain))
-    : await sources.run('urlscan', 'urlscan.io submissions', null, { skipIf: 'Section not selected' });
-
-  const arquivo = needArquivo
-    ? await sources.run('arquivo', 'Arquivo.pt full-text archive', () => fetchArquivo(domain))
-    : await sources.run('arquivo', 'Arquivo.pt full-text archive', null, { skipIf: 'Section not selected' });
-
-  const codeRefs = needGrepApp
-    ? await sources.run('grepapp', 'Public code search (grep.app)', () => fetchGrepApp(domain))
-    : await sources.run('grepapp', 'Public code search (grep.app)', null, { skipIf: 'Section not selected' });
+  // ── 1. Start every source at once ───────────────────────────────────────
+  // This was one chain of awaits: on theranos.com 199 s passed before the first archived page
+  // was read, 123 s of them in Arquivo.pt's full-text search, a mentions source the archive stage
+  // never needed. Now the archive crawl, which the contacts depend on, starts first and the rest
+  // run beside it; each source ends on its own timeout or at the run's deadline.
+  const pending = [];              // started sources, so any still running at the deadline can be named
+  const start = (name, label, fn, skipIf = null) => {
+    if (skipIf) return sources.run(name, label, null, { skipIf });
+    pending.push({ name, label, at: Date.now() });
+    return sources.run(name, label, fn);
+  };
+  // A source can never fail the run, whatever its own code throws.
+  const safe = (promise, what) => promise.catch((err) => {
+    log.warning(`  ${what} failed: ${String(err?.message || err).slice(0, 160)}`);
+    return null;
+  });
 
   // Emails hiding in public code are real contacts - harvest them with provenance.
-  if (want('contacts') && codeRefs?.rawText) {
-    const re = new RegExp(`[A-Za-z0-9._%+-]+@${domain.replace(/\./g, '\\.')}`, 'gi');
-    for (const m of new Set(codeRefs.rawText.match(re) || [])) {
-      const ref = codeRefs.codeReferences.find((c) => (c.snippet || '').includes(m));
-      contacts.add({
-        type: 'email',
-        value: m.toLowerCase(),
-        sourceType: 'grepapp',
-        sourceUrl: ref?.url || codeRefs.sourceUrl,
-        extractionMethod: 'code-search',
-        confidence: classifyEmail(m).confidence,
-        context: ref ? `${ref.repo}/${ref.path}` : 'public code',
-      });
+  const harvestCodeEmails = (codeRefs) => {
+    if (want('contacts') && codeRefs?.rawText) {
+      const re = new RegExp(`[A-Za-z0-9._%+-]+@${domain.replace(/\./g, '\\.')}`, 'gi');
+      for (const m of new Set(codeRefs.rawText.match(re) || [])) {
+        const ref = codeRefs.codeReferences.find((c) => (c.snippet || '').includes(m));
+        contacts.add({
+          type: 'email',
+          value: m.toLowerCase(),
+          sourceType: 'grepapp',
+          sourceUrl: ref?.url || codeRefs.sourceUrl,
+          extractionMethod: 'code-search',
+          confidence: classifyEmail(m).confidence,
+          context: ref ? `${ref.repo}/${ref.path}` : 'public code',
+        });
+      }
     }
-  }
+    return codeRefs;
+  };
 
-  // ── 4. The archive layer ────────────────────────────────────────────────
-  let snapshots = [];
-  const cdx = needArchivePages
-    ? await sources.run('wayback_cdx', 'Wayback CDX index', async () => {
-      snapshots = await wayback.fetchSnapshots(domain, limiter, {
-        serverLimit: depth === 'deep' ? 15_000 : 5_000,
-        deadlineMs: depth === 'deep' ? 120_000 : 60_000,
-        maxPages: depth === 'deep' ? 10 : 3,
-      });
-      return snapshots;
-    })
-    : await sources.run('wayback_cdx', 'Wayback CDX index', null, { skipIf: 'No archive-dependent section selected' });
+  const cdxP = needArchivePages
+    ? start('wayback_cdx', 'Wayback CDX index', () => wayback.fetchSnapshots(domain, limiter, {
+      serverLimit: depth === 'deep' ? 15_000 : 5_000,
+      deadlineMs: depth === 'deep' ? 120_000 : 60_000,
+      maxPages: depth === 'deep' ? 10 : 3,
+    }))
+    : start('wayback_cdx', 'Wayback CDX index', null, 'No archive-dependent section selected');
 
+  // Live state, registration, certificates, passive DNS
+  const liveP = start('live_dns', 'Live DNS', () => fetchLiveDns(domain));
+  const regionHint = domain.split('.').pop().length === 2 ? domain.split('.').pop().toUpperCase() : undefined;
+
+  const rdapP = needRdap
+    ? start('rdap', 'RDAP registration', () => fetchRdap(domain, want('contacts') ? contacts : null))
+    : start('rdap', 'RDAP registration', null, 'Section not selected');
+
+  const whoisHistoryP = needWhoisHistory
+    ? start('whois_history', 'WHOIS history (Whoxy)', () => fetchWhoisHistory(domain, whoisHistoryApiKey, want('contacts') ? contacts : null))
+    : start('whois_history', 'WHOIS history (Whoxy)', null, whoisHistoryApiKey ? 'Section not selected' : 'No Whoxy API key provided');
+
+  const certsP = needCerts
+    ? start('crtsh', 'Certificate transparency (crt.sh)', () => fetchCerts(domain, want('contacts') ? contacts : null))
+    : start('crtsh', 'Certificate transparency (crt.sh)', null, 'Section not selected');
+
+  const pdnsP = needPassiveDns
+    ? start('passive_dns', 'Passive DNS history', () => fetchPassiveDns(domain))
+    : start('passive_dns', 'Passive DNS history', null, 'Section not selected');
+
+  // SecurityTrails: DNS history + WHOIS history (BYOK, free 2500 queries/month)
+  const stDnsP = needSecurityTrails && want('hosting')
+    ? start('securitytrails_dns', 'SecurityTrails DNS history', () => fetchStDnsHistory(domain, securityTrailsApiKey))
+    : start('securitytrails_dns', 'SecurityTrails DNS history', null, securityTrailsApiKey ? 'Section not selected' : 'No SecurityTrails API key');
+
+  const stWhoisP = needSecurityTrails && (want('ownership') || want('contacts'))
+    ? start('securitytrails_whois', 'SecurityTrails WHOIS history', () => fetchStWhoisHistory(domain, securityTrailsApiKey, want('contacts') ? contacts : null))
+    : start('securitytrails_whois', 'SecurityTrails WHOIS history', null, securityTrailsApiKey ? 'Section not selected' : 'No SecurityTrails API key');
+
+  // IP geolocation - free, no key, enriches the historical IPs passive DNS finds
+  pending.push({ name: 'ip_geolocation', label: 'IP geolocation (ip-api.com)', at: Date.now() });
+  const ipGeoP = safe(pdnsP.then((pdns) => ((want('hosting') && pdns?.historicalIps?.length)
+    ? start('ip_geolocation', 'IP geolocation (ip-api.com)', () => geolocateIps(pdns.historicalIps))
+    : start('ip_geolocation', 'IP geolocation (ip-api.com)', null, want('hosting') ? 'No historical IPs to geolocate' : 'Section not selected'))), 'IP geolocation');
+
+  // Inbound references
+  const urlscanP = needUrlscan
+    ? start('urlscan', 'urlscan.io submissions', () => fetchUrlscan(domain))
+    : start('urlscan', 'urlscan.io submissions', null, 'Section not selected');
+
+  const arquivoP = needArquivo
+    ? start('arquivo', 'Arquivo.pt full-text archive', () => fetchArquivo(domain))
+    : start('arquivo', 'Arquivo.pt full-text archive', null, 'Section not selected');
+
+  const codeRefsP = safe((needGrepApp
+    ? start('grepapp', 'Public code search (grep.app)', () => fetchGrepApp(domain))
+    : start('grepapp', 'Public code search (grep.app)', null, 'Section not selected')).then(harvestCodeEmails), 'Public code search');
+
+  // ── 2. The archive layer: the crawl is the one thing the pages stage waits for ──
+  const snapshots = (await cdxP) || [];
   const deduped = dedupeByDigest(snapshots);
   const sampled = sampleSnapshots(deduped, pageCap);
   if (needArchivePages) log.info(`  archive: ${snapshots.length} captures -> ${deduped.length} deduped -> ${sampled.length} sampled`);
@@ -300,29 +354,34 @@ for (const domain of domains) {
    * only holds pages that existed when it ran, so this window decides which
    * indexes are worth asking - without it the actor queried 2008, 2017, 2021 and
    * 2026 for a domain that lived 2024-2025, and concluded it had no records.
+   * Common Crawl waits for the registration and certificate dates it needs, in the
+   * background: the pages stage does not.
    */
-  const lifespan = (() => {
-    const years = [];
-    if (stamps.length) years.push(Number(stamps[0].slice(0, 4)), Number(stamps[stamps.length - 1].slice(0, 4)));
-    for (const d of [certs?.firstCertificate, certs?.lastCertificate]) {
-      const y = d && Number(String(d).slice(0, 4));
-      if (y) years.push(y);
-    }
-    for (const e of rdap?.events || []) {
-      const y = e?.date && Number(String(e.date).slice(0, 4));
-      if (y) years.push(y);
-    }
-    const thisYear = new Date().getFullYear();
-    const valid = years.filter((y) => Number.isFinite(y) && y >= 1990 && y <= thisYear + 5);
-    if (!valid.length) return null;
-    return { fromYear: Math.min(...valid), toYear: Math.min(Math.max(...valid), thisYear) };
-  })();
-
-  const cc = needCommonCrawl
-    ? await sources.run('commoncrawl', 'Common Crawl index', () => fetchCommonCrawl(domain, lifespan))
-    : await sources.run('commoncrawl', 'Common Crawl index', null, { skipIf: 'Section not selected' });
+  pending.push({ name: 'commoncrawl', label: 'Common Crawl index', at: Date.now() });
+  const ccP = safe(Promise.all([rdapP, certsP]).then(([rdap, certs]) => {
+    const lifespan = (() => {
+      const years = [];
+      if (stamps.length) years.push(Number(stamps[0].slice(0, 4)), Number(stamps[stamps.length - 1].slice(0, 4)));
+      for (const d of [certs?.firstCertificate, certs?.lastCertificate]) {
+        const y = d && Number(String(d).slice(0, 4));
+        if (y) years.push(y);
+      }
+      for (const e of rdap?.events || []) {
+        const y = e?.date && Number(String(e.date).slice(0, 4));
+        if (y) years.push(y);
+      }
+      const thisYear = new Date().getFullYear();
+      const valid = years.filter((y) => Number.isFinite(y) && y >= 1990 && y <= thisYear + 5);
+      if (!valid.length) return null;
+      return { fromYear: Math.min(...valid), toYear: Math.min(Math.max(...valid), thisYear) };
+    })();
+    return needCommonCrawl
+      ? start('commoncrawl', 'Common Crawl index', () => fetchCommonCrawl(domain, lifespan))
+      : start('commoncrawl', 'Common Crawl index', null, 'Section not selected');
+  }), 'Common Crawl');
 
   let pagesFetched = 0; let pagesBlocked = 0; let pagesFailed = 0; let pagesRendered = 0; let pagesSkippedForTime = 0;
+  let cutByRunClock = false;       // pages were left unread because the run's own time limit came, not the depth's budget
   const timing = { fetch: 0, render: 0, extract: 0, entities: 0 };   // ms, summed across the 3 parallel workers
   const identifiers = new Map();
   const originServers = new Set();
@@ -331,15 +390,20 @@ for (const domain of domains) {
     const limit = pLimit(3);                       // archive.org politeness, not CPU
     const stageStart = Date.now();
     const stageBudgetMs = STAGE_BUDGET_MS[depth];
+    let stageOpen = true;                          // false once the stage is over: a task abandoned at the deadline must not touch the results
     await sources.run('wayback_pages', 'Archived page contents', async () => {
-      const results = await Promise.all(sampled.map((s) => limit(() => withTimeout((async () => {
+      // Pages most likely to name people go first, so a run cut short has read the best ones.
+      const results = await Promise.all(readOrder(sampled).map((s) => limit(() => withTimeout((async () => {
         if (limiter.isHardBlocked) { pagesBlocked += 1; return null; }
-        // Budget check before each page: pages already in flight finish (bounded
-        // by the per-page deadline); the rest are reported, not silently dropped.
+        // Budget check before each page: pages already in flight finish (bounded by the
+        // page deadline, which the run clock caps); the rest are reported, not silently dropped.
+        if (expired()) { cutByRunClock = true; pagesSkippedForTime += 1; return null; }
         if (Date.now() - stageStart > stageBudgetMs) { pagesSkippedForTime += 1; return null; }
         let t = performance.now();
         const page = await wayback.fetchSnapshot(s, limiter);
         timing.fetch += performance.now() - t;
+        if (!stageOpen) return null;
+        if (page.error === 'deadline') { cutByRunClock = true; pagesSkippedForTime += 1; return null; }
         if (page.error === 'blocked' || page.error === 'rate_limited') { pagesBlocked += 1; return null; }
         if (!page.html) { pagesFailed += 1; return null; }
         pagesFetched += 1;
@@ -351,6 +415,7 @@ for (const domain of domains) {
         t = performance.now();
         const rendered = await renderPage(page.html);
         timing.render += performance.now() - t;
+        if (!stageOpen) return null;
         if (rendered?.html && rendered.html !== page.html) { pagesRendered += 1; variants.push({ html: rendered.html, method: 'rendered' }); }
 
         t = performance.now();
@@ -388,6 +453,7 @@ for (const domain of domains) {
         timing.extract += performance.now() - t;
 
         // People and organisations: once per page, on the best text we have.
+        if (!stageOpen) return null;
         // Emails and phones run on both variants because de-obfuscation wants
         // raw bytes; names do not hide in entities, so the rendered DOM's
         // innerText is strictly better and the raw parse is only the fallback.
@@ -400,6 +466,7 @@ for (const domain of domains) {
             ...await classifyCandidates(declared.filter((e) => e.type === 'candidate'), ner, lineCache),
             ...await extractNamedEntities(text, ner, lineCache),
           ];
+          if (!stageOpen) return null;
           for (const e of found) {
             contacts.add({
               type: e.type,
@@ -424,16 +491,29 @@ for (const domain of domains) {
         }
         timing.entities += performance.now() - t;
         return true;
-      })(), PAGE_DEADLINE_MS, `page ${s.original}`).catch((err) => {
+      })(), cap(PAGE_DEADLINE_MS), `page ${s.original}`).catch((err) => {
         // One page can fail or time out; it must never take the stage with it.
+        if (expired()) { cutByRunClock = true; pagesSkippedForTime += 1; return null; }   // in flight when the clock ran out: not read, not failed
         pagesFailed += 1;
         log.warning(`  page abandoned: ${String(err.message).slice(0, 140)}`);
         return null;
       }))));
-      if (pagesSkippedForTime) log.warning(`  ${depth} time budget (${stageBudgetMs / 1000}s) reached: ${pagesSkippedForTime} of ${sampled.length} sampled pages not fetched`);
+      stageOpen = false;
+      if (pagesSkippedForTime) log.warning(`  ${cutByRunClock ? 'run time limit' : `${depth} time budget (${stageBudgetMs / 1000}s)`} reached: ${pagesSkippedForTime} of ${sampled.length} sampled pages not fetched`);
       return results.filter(Boolean);
     });
   }
+
+  // ── 4. Collect everything that ran beside the pages ─────────────────────
+  // Whatever is still running gets what is left of the clock, and no more: a source that never
+  // settles must not hold the report back, because a run that does not finish writes nothing.
+  const gathered = await Promise.all([liveP, rdapP, whoisHistoryP, certsP, pdnsP, stDnsP, stWhoisP, ipGeoP, urlscanP, arquivoP, codeRefsP, ccP]
+    .map((p) => bounded(p)));
+  const [live, rdap, whoisHistory, certs, pdns, stDns, stWhois, ipGeo, urlscan, arquivo, codeRefs, cc] = gathered
+    .map((v) => (v === PENDING ? null : v));
+  for (const src of pending) sources.abandon(src.name, src.label, src.at);   // names the ones that never answered
+  const hosted = !!live?.hosted;
+  const liveStatus = live?.state || 'unknown';
 
   // ── 5. Cross-page entity filters ─────────────────────────────────────────
   // (a) A name found as both person and organisation is an organisation.
@@ -466,6 +546,10 @@ for (const domain of domains) {
   const summary = contacts.summary();
   let limitReached = false;
   const sourceCounts = sources.counts();
+  // Pages that could not be read - blocked, left for the clock, or never listed because the archive
+  // index did not answer - turn "nothing found" into "unknown".
+  const cdxSrc = sources.toArray().find((s) => s.source === 'wayback_cdx');
+  const unread = pagesBlocked + pagesSkippedForTime + (incomplete(cdxSrc) ? 1 : 0);
 
   // ── Status block (always present) ───────────────────────────────────────
   const firstSeen = stamps[0] || certs?.firstCertificate || null;
@@ -564,7 +648,7 @@ for (const domain of domains) {
     // Site-level entities first, then by how often they were seen. Emails and
     // phones have no relation and sort among the site entities.
     const REL = { site: 0, mention: 1 };
-    items.sort((a, b) => (REL[a.relation] ?? 0) - (REL[b.relation] ?? 0) || b.occurrences - a.occurrences);
+    items.sort((a, b) => (REL[a.relation] ?? 0) - (REL[b.relation] ?? 0) || b.occurrences - a.occurrences || a.value.localeCompare(b.value));
     results.contacts = {
       found: summary.total,
       breakdown: summary.byType,
@@ -602,13 +686,15 @@ for (const domain of domains) {
       }
     }
 
-    const contactSources = ['wayback_pages', 'rdap', 'grepapp', 'crtsh', 'whois_history', 'securitytrails_whois'];
+    const contactSources = ['wayback_cdx', 'wayback_pages', 'rdap', 'grepapp', 'crtsh', 'whois_history', 'securitytrails_whois'];
     const relevant = sources.toArray().filter((s) => contactSources.includes(s.source));
-    const anyFailed = relevant.some((s) => s.status === STATUS.RATE_LIMITED || s.status === STATUS.FAILED);
+    const anyFailed = relevant.some(incomplete) || pagesSkippedForTime > 0;   // unread pages are contacts nobody looked for
     coverage.contacts = {
       status: anyFailed ? 'incomplete' : 'complete',
       note: anyFailed
-        ? 'Some sources were unreachable. Missing contacts here are UNKNOWN, not absent - re-run later.'
+        ? (relevant.some(incomplete)
+          ? 'Some sources were unreachable or ran out of time. Missing contacts here are UNKNOWN, not absent - re-run later.'
+          : `${pagesSkippedForTime} archived page(s) were not read before the ${cutByRunClock ? "run's time limit" : `${depth} time budget`}. Missing contacts here are UNKNOWN, not absent - re-run${cutByRunClock ? ' with a longer timeout' : ' deeper'}.`)
         : (summary.total ? null : 'All sources responded, genuinely no contacts found.'),
     };
   }
@@ -690,9 +776,9 @@ for (const domain of domains) {
     const stOk = !stSrc || stSrc.status === STATUS.OK || stSrc.status === STATUS.EMPTY || stSrc.status === STATUS.SKIPPED;
     coverage.ownership = {
       status: rdapOk && whOk && stOk ? 'complete' : 'incomplete',
-      note: !rdapOk ? 'RDAP errored. Re-run.'
-        : (!whOk ? 'WHOIS history errored. Check your Whoxy API key.'
-          : (!stOk ? 'SecurityTrails errored. Check your API key.' : null)),
+      note: !rdapOk ? (ranOut(src) ? 'RDAP ran out of run time. Re-run with a longer timeout.' : 'RDAP errored. Re-run.')
+        : (!whOk ? (ranOut(whSrc) ? 'WHOIS history ran out of run time. Re-run with a longer timeout.' : 'WHOIS history errored. Check your Whoxy API key.')
+          : (!stOk ? (ranOut(stSrc) ? 'SecurityTrails ran out of run time. Re-run with a longer timeout.' : 'SecurityTrails errored. Check your API key.') : null)),
     };
   }
 
@@ -716,7 +802,7 @@ for (const domain of domains) {
     const src = sources.toArray().find((s) => s.source === 'crtsh');
     coverage.subdomains = {
       status: src?.status === STATUS.OK || src?.status === STATUS.EMPTY ? 'complete' : 'incomplete',
-      note: src?.status === STATUS.FAILED ? 'crt.sh errored. Re-run.' : null,
+      note: src?.status === STATUS.FAILED ? 'crt.sh errored. Re-run.' : (ranOut(src) ? 'crt.sh ran out of run time. Re-run with a longer timeout.' : null),
     };
   }
 
@@ -775,7 +861,7 @@ for (const domain of domains) {
 
     const hostSources = ['urlscan', 'passive_dns', 'securitytrails_dns', 'ip_geolocation'];
     const relevant = sources.toArray().filter((s) => hostSources.includes(s.source));
-    const anyFailed = relevant.some((s) => s.status === STATUS.RATE_LIMITED || s.status === STATUS.FAILED);
+    const anyFailed = relevant.some(incomplete);
     coverage.hosting = {
       status: anyFailed ? 'incomplete' : 'complete',
       note: anyFailed ? 'Some hosting sources were unreachable. Re-run later.' : null,
@@ -808,24 +894,27 @@ for (const domain of domains) {
         openIt: wayback.replayUrl(s.timestamp, s.original, 'mp_'),
       })),
       plainEnglish: (pagesSkippedForTime
-        ? `${pagesSkippedForTime} of ${sampled.length} sampled pages were not fetched: the ${depth} time budget ran out. Re-run with Standard or Deep for the rest. `
+        ? `${pagesSkippedForTime} of ${sampled.length} sampled pages were not fetched: ${cutByRunClock ? "the run's time limit was reached. Raise the run timeout (Input > Run options) and re-run for the rest" : `the ${depth} time budget ran out. Re-run with Standard or Deep for the rest`}. `
         : '') + (pagesBlocked
         ? `archive.org blocked or throttled ${pagesBlocked} page fetch(es). Missing data here is UNKNOWN, not absent - re-run later.`
         : (pagesFetched
           ? `${pagesFetched} archived pages recovered, covering ${[...new Set(stamps.map((t) => t.slice(0, 4)))].join(', ')}.`
-          : 'No archived pages found for this domain.')),
+          : (incomplete(cdxSrc)
+            ? 'The archive index did not answer, so no archived page could be fetched. That is UNKNOWN, not absent - re-run.'
+            : 'No archived pages found for this domain.'))),
     };
 
     const src = sources.toArray().find((s) => s.source === 'wayback_pages');
-    const cdxSrc = sources.toArray().find((s) => s.source === 'wayback_cdx');
-    const anyFailed = [src, cdxSrc].some((s) => s?.status === STATUS.RATE_LIMITED || s?.status === STATUS.FAILED);
+    const anyFailed = [src, cdxSrc].some(incomplete);
     coverage.old_pages = {
       status: (pagesBlocked || pagesSkippedForTime) ? 'incomplete' : (anyFailed ? 'incomplete' : 'complete'),
       note: pagesSkippedForTime
-        ? `${pagesSkippedForTime} page(s) not fetched: the ${depth} time budget was reached. Not absent, not read yet - re-run deeper.`
+        ? (cutByRunClock
+          ? `${pagesSkippedForTime} page(s) not fetched: the run's time limit was reached. Not absent, not read yet - re-run with a longer timeout.`
+          : `${pagesSkippedForTime} page(s) not fetched: the ${depth} time budget was reached. Not absent, not read yet - re-run deeper.`)
         : (pagesBlocked
           ? `${pagesBlocked} page(s) were throttled. This is UNKNOWN, not absent.`
-          : null),
+          : (incomplete(cdxSrc) ? 'The archive index did not answer, so no page could be fetched. This is UNKNOWN, not absent - re-run.' : null)),
     };
   }
 
@@ -841,8 +930,8 @@ for (const domain of domains) {
           : 'Archive pages were not fetched (no archive-dependent section selected).'),
     };
     coverage.server_tech = {
-      status: originServers.size || !pagesBlocked ? 'complete' : 'incomplete',
-      note: originServers.size ? null : (pagesBlocked ? 'Some pages were blocked - server info may exist but could not be read.' : 'checked and genuinely empty'),
+      status: originServers.size || !unread ? 'complete' : 'incomplete',
+      note: originServers.size ? null : (unread ? 'Some pages were not read (blocked or out of time) - server info may exist but was not seen.' : 'checked and genuinely empty'),
     };
   }
 
@@ -861,8 +950,8 @@ for (const domain of domains) {
       found: idList.length,
       items: idList,
       whyEmpty: !idList.length
-        ? (pagesBlocked
-          ? 'Some archived pages were blocked, so analytics IDs may exist but could not be read.'
+        ? (unread
+          ? 'Some archived pages were not read (blocked or out of time), so analytics IDs may exist but were not seen.'
           : 'No analytics or ad IDs were present in the saved pages. Genuinely absent, not blocked.')
         : null,
       plainEnglish: idList.length
@@ -870,9 +959,9 @@ for (const domain of domains) {
         : null,
     };
     coverage.tracking_ids = {
-      status: !pagesBlocked ? 'complete' : 'incomplete',
+      status: !unread ? 'complete' : 'incomplete',
       note: !idList.length
-        ? (pagesBlocked ? 'Pages blocked - IDs are unknown, not absent.' : 'checked and genuinely empty')
+        ? (unread ? 'Pages not read (blocked or out of time) - IDs are unknown, not absent.' : 'checked and genuinely empty')
         : null,
     };
   }
@@ -916,11 +1005,15 @@ for (const domain of domains) {
 
     const mentionSources = ['urlscan', 'arquivo', 'grepapp', 'commoncrawl'];
     const relevant = sources.toArray().filter((s) => mentionSources.includes(s.source));
-    const failedOrLimited = relevant.filter((s) => s.status === STATUS.RATE_LIMITED || s.status === STATUS.FAILED);
+    // Arquivo counts as answered when either half did; the half that did not is a gap all the same.
+    const gaps = [
+      ...relevant.filter(incomplete).map((s) => s.label),
+      ...(arquivo?.errors?.length && !relevant.some((s) => s.source === 'arquivo' && incomplete(s)) ? ['Arquivo.pt (one of its two searches)'] : []),
+    ];
     coverage.mentions = {
-      status: failedOrLimited.length ? 'incomplete' : 'complete',
-      note: failedOrLimited.length
-        ? `${failedOrLimited.map((s) => s.label).join(', ')} - unreachable. This is UNKNOWN, not absent. Re-run.`
+      status: gaps.length ? 'incomplete' : 'complete',
+      note: gaps.length
+        ? `${gaps.join(', ')} - did not answer. This is UNKNOWN, not absent. Re-run.`
         : null,
     };
   }
@@ -945,6 +1038,7 @@ for (const domain of domains) {
     failed: sourceCounts.failed,
     skipped: sourceCounts.skipped,
     rateLimited: sourceCounts.rate_limited,
+    timeLimited: sourceCounts.time_limited,
     explanation: sources.explain(),
     sources: sources.toArray(),
   };
@@ -979,11 +1073,11 @@ for (const domain of domains) {
   });
 
   log.info(`  ${domain}: ${summary.total} contacts, `
-    + `${sourceCounts.ok} sources ok / ${sourceCounts.empty} empty / ${sourceCounts.failed} failed / ${sourceCounts.rate_limited} rate-limited / ${sourceCounts.skipped} skipped`);
+    + `${sourceCounts.ok} sources ok / ${sourceCounts.empty} empty / ${sourceCounts.failed} failed / ${sourceCounts.rate_limited} rate-limited / ${sourceCounts.time_limited} out of time / ${sourceCounts.skipped} skipped`);
 }
 
 // OUTPUT is what Console's Output tab renders: the report itself for the usual
 // single-domain run, the list of reports for a batch.
 await Actor.setValue('OUTPUT', reports.length === 1 ? reports[0] : { domains: reports });
-if (browser) await browser.close().catch(() => {});
+if (browser) await withTimeout(browser.close(), 5_000, 'browser.close').catch(() => {});
 await Actor.exit();

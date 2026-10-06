@@ -230,6 +230,17 @@ export function sampleSnapshots(snapshots, cap) {
     .sort((a, b) => String(a.timestamp).localeCompare(String(b.timestamp)));
 }
 
+/**
+ * The order to READ the sampled pages in. `sampleSnapshots` returns them oldest first, which
+ * suits the report but not a run that the clock may cut short: that would lose the newest pages,
+ * contact and team pages among them. Pages most likely to name people (contact, about, team,
+ * board ...) go first, then the home page, then the rest, oldest first within each class.
+ */
+export function readOrder(sampled) {
+  return [...sampled].sort((a, b) => scorePath(normalizePath(b.original)) - scorePath(normalizePath(a.original))
+    || String(a.timestamp).localeCompare(String(b.timestamp)));
+}
+
 /** Drop duplicate (path, content-digest) pairs - same bytes at the same path. */
 export function dedupeByDigest(snapshots) {
   const seen = new Set();

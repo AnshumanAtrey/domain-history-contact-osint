@@ -16,6 +16,7 @@
  */
 
 import { log } from 'apify';
+import { timeoutSignal } from '../core/clock.js';
 
 const API_BASE = 'https://api.whoxy.com/';
 
@@ -31,7 +32,7 @@ export async function fetchWhoisHistory(domain, apiKey, contacts) {
   const url = `${API_BASE}?key=${encodeURIComponent(apiKey)}&history=${encodeURIComponent(domain)}`;
   const res = await fetch(url, {
     headers: { 'User-Agent': 'domain-history-contact-osint/0.4 (Apify actor)' },
-    signal: AbortSignal.timeout(30_000),
+    signal: timeoutSignal(30_000),
   });
 
   if (!res.ok) {

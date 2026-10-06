@@ -66,7 +66,7 @@ Row counts measured on the platform at Standard depth (Quick, the default, finds
 - Large corporate archive (theranos.com, 231 rows): 47 contacts + 183 mentions, **$1.56**
 - Nothing recoverable: **$0.25**, the scan plus the free summary row that says why
 
-A Quick run takes about 3 minutes at 2 GB and Standard about 6; raising memory to 4 GB roughly halves the time and doubles the scan fee. Deep depends on how much the archive holds. Set a spending limit on the run for a hard cap; the summary row says so if it was reached.
+A Quick run takes about 3 minutes at 2 GB and Standard about 6; raising memory to 4 GB roughly halves the time and doubles the scan fee. Deep depends on how much the archive holds. Set a spending limit on the run for a hard cap; the summary row says so if it was reached. A run also always finishes inside its own timeout: when the timeout comes before the scan is done, the report is written with what was read and says which pages and sources were left, as unknown rather than absent. Raise the timeout under Run options to read the rest.
 
 ## Which inputs does it take?
 

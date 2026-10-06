@@ -11,6 +11,7 @@
  * anonymous responses zero out firstSeen/lastSeen and flag partialResult).
  */
 import { httpGet, withRetry } from './http.js';
+import { timeoutSignal } from '../core/clock.js';
 
 const DOH = 'https://dns.google/resolve';
 const TYPES = ['A', 'AAAA', 'MX', 'NS', 'TXT', 'SOA', 'CNAME'];
@@ -224,7 +225,7 @@ export async function geolocateIps(ips) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(unique.map((ip) => ({ query: ip }))),
-      signal: AbortSignal.timeout(15_000),
+      signal: timeoutSignal(15_000),
     });
     if (!res.ok) return geo;
     const results = await res.json();

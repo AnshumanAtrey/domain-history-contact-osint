@@ -13,6 +13,7 @@
  */
 
 import { log } from 'apify';
+import { timeoutSignal } from '../core/clock.js';
 
 const API_BASE = 'https://api.securitytrails.com/v1';
 
@@ -22,7 +23,7 @@ async function stFetch(path, apiKey) {
       APIKEY: apiKey,
       Accept: 'application/json',
     },
-    signal: AbortSignal.timeout(25_000),
+    signal: timeoutSignal(25_000),
   });
   if (res.status === 429) throw new Error('SecurityTrails rate limited (429)');
   if (res.status === 403 || res.status === 401) throw new Error(`SecurityTrails API key invalid (HTTP ${res.status})`);

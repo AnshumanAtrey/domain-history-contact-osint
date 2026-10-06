@@ -14,6 +14,8 @@
  * spent before we make our first request.
  */
 
+import { msLeft, expired, DeadlineReached } from './clock.js';
+
 const START_RPM = 60;
 const MIN_RPM = 30;
 const MAX_RPM = 75;          // measured refusal point is ~105/min; stay well under
@@ -82,9 +84,13 @@ export class ArchiveLimiter {
   /** Block until a request slot is available. Honours global pause and cooldowns. */
   async acquire() {
     for (;;) {
+      if (expired()) throw new DeadlineReached('an archive.org request slot');
       const now = Date.now();
       if (this.pausedUntil > now) {
         const waitMs = this.pausedUntil - now;
+        // A cooldown longer than the run has left can never be waited out: say so now
+        // rather than sleeping until the platform stops the run.
+        if (waitMs >= msLeft()) throw new DeadlineReached('the archive.org cooldown');
         // A long pause must never be silent: a run once sat idle for minutes with
         // nothing in the log to say why.
         if (waitMs > 15_000 && !this.pauseAnnounced) {
