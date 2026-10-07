@@ -157,6 +157,13 @@ const withTimeout = (promise, ms, label) => new Promise((resolve, reject) => {
 
 const ranOut = (rec) => rec?.status === STATUS.TIME_LIMITED;
 
+const sleep = (ms) => new Promise((resolve) => { setTimeout(resolve, Math.max(ms, 0)); });
+
+// Arquivo.pt's full-text search is the slowest source (34-86 s measured 2026-10-07) and an extra, not the
+// product. It gets the time the rest of the scan takes, and at least this much from the start of the scan:
+// a dead domain's scan is short, and the "no mentions" answer for one took 34 s.
+const ARQUIVO_MIN_WAIT_MS = 45_000;
+
 // A source still running when the clock is out resolves to this instead of its value, so one
 // that never settles cannot hold the report back.
 const PENDING = Symbol('pending');
@@ -332,8 +339,9 @@ for (const [index, domain] of domains.entries()) {
     ? start('urlscan', 'urlscan.io submissions', () => fetchUrlscan(domain))
     : start('urlscan', 'urlscan.io submissions', null, 'Section not selected');
 
+  const arquivoStop = new AbortController();      // aborted when the run stops waiting for Arquivo.pt
   const arquivoP = needArquivo
-    ? start('arquivo', 'Arquivo.pt full-text archive', () => fetchArquivo(domain))
+    ? start('arquivo', 'Arquivo.pt full-text archive', () => fetchArquivo(domain, { stop: arquivoStop.signal }))
     : start('arquivo', 'Arquivo.pt full-text archive', null, 'Section not selected');
 
   const codeRefsP = safe((needGrepApp
@@ -505,6 +513,12 @@ for (const [index, domain] of domains.entries()) {
   }
 
   // ── 4. Collect everything that ran beside the pages ─────────────────────
+  // Arquivo.pt never holds the run up: once everything else is done (and its minimum has passed) the
+  // run stops waiting, keeps the half that answered, and the report says which half did not.
+  if (needArquivo) {
+    await Promise.race([arquivoP, sleep(Math.min(started + ARQUIVO_MIN_WAIT_MS - Date.now(), msLeft()))]);
+    arquivoStop.abort();
+  }
   // Whatever is still running gets what is left of the clock, and no more: a source that never
   // settles must not hold the report back, because a run that does not finish writes nothing.
   const gathered = await Promise.all([liveP, rdapP, whoisHistoryP, certsP, pdnsP, stDnsP, stWhoisP, ipGeoP, urlscanP, arquivoP, codeRefsP, ccP]
@@ -986,6 +1000,8 @@ for (const [index, domain] of domains.entries()) {
         captures: arquivo.captures,
         sourceUrl: arquivo.sourceUrl,
         cdxSourceUrl: arquivo.cdxSourceUrl,
+        fullTextSearch: arquivo.fullTextSearch,
+        capturesLookup: arquivo.capturesLookup,
       } : null,
       publicCode: codeRefs ? {
         count: codeRefs.count,

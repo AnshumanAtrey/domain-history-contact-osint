@@ -1,6 +1,6 @@
 /** Shared fetch helper: timeouts, a real UA, and throttle-aware error shaping. */
 import { isThrottleError, isConnectionRefused } from '../core/ratelimit.js';
-import { cap, msLeft, expired, DeadlineReached } from '../core/clock.js';
+import { cap, msLeft, expired, DeadlineReached, StoppedWaiting } from '../core/clock.js';
 
 export const UA = 'domain-history-contact-osint/0.1 (+https://apify.com/anshumanatrey/domain-history-contact-osint)';
 
@@ -11,16 +11,19 @@ export class HardBlocked extends Error {
   constructor(msg) { super(msg); this.name = 'HardBlocked'; }
 }
 
-export async function httpGet(url, { timeoutMs = 30_000, headers = {}, accept = 'application/json', raw = false } = {}) {
+export async function httpGet(url, { timeoutMs = 30_000, headers = {}, accept = 'application/json', raw = false, signal = null } = {}) {
+  if (signal?.aborted) throw new StoppedWaiting(url);
   if (expired()) throw new DeadlineReached(url);
+  const timeout = AbortSignal.timeout(cap(timeoutMs));   // never past the run's deadline
   let res;
   try {
     res = await fetch(url, {
       headers: { 'User-Agent': UA, Accept: accept, ...headers },
-      signal: AbortSignal.timeout(cap(timeoutMs)),   // never past the run's deadline
+      signal: signal ? AbortSignal.any([timeout, signal]) : timeout,   // `signal`: the caller may stop waiting
       redirect: 'follow',
     });
   } catch (err) {
+    if (signal?.aborted) throw new StoppedWaiting(url);
     // The run's clock aborted it, not the server: not a throttle signal, and not worth a retry.
     if (msLeft() < 100) throw new DeadlineReached(url);
     if (isConnectionRefused(err)) throw new HardBlocked(`connection refused: ${url}`);
@@ -37,7 +40,9 @@ export async function httpGet(url, { timeoutMs = 30_000, headers = {}, accept = 
     throw e;
   }
   // The abort signal also covers the body, so a slow body is cut at the deadline too.
-  const read = () => res.text().catch((err) => { throw msLeft() < 100 ? new DeadlineReached(url) : err; });
+  const read = () => res.text().catch((err) => {
+    throw signal?.aborted ? new StoppedWaiting(url) : (msLeft() < 100 ? new DeadlineReached(url) : err);
+  });
   if (raw) return { res, body: await read() };
   const text = await read();
   if (!text.trim()) return { res, json: null, body: text };
@@ -64,7 +69,7 @@ export async function withRetry(fn, { limiter, attempts = 4, label = 'request' }
       return await fn();
     } catch (err) {
       lastErr = err;
-      if (err instanceof DeadlineReached) throw err;             // no retry can fit in what is left
+      if (err instanceof DeadlineReached || err instanceof StoppedWaiting) throw err;   // out of time, or no longer wanted
       if (err instanceof HardBlocked) { limiter?.reportRefusal(); throw err; }
       if (err instanceof RateLimited) {
         limiter?.reportThrottle(err.retryAfterSec);

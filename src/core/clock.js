@@ -24,6 +24,14 @@ export class DeadlineReached extends Error {
   }
 }
 
+/** The caller stopped waiting: everything else was done and this source is an extra. Not the source's fault. */
+export class StoppedWaiting extends Error {
+  constructor(what = 'the request') {
+    super(`stopped waiting for ${what}: everything else in the scan was done`);
+    this.name = 'StoppedWaiting';
+  }
+}
+
 export function setDeadline(atMs) {
   deadlineAt = Number.isFinite(atMs) ? atMs : null;
 }

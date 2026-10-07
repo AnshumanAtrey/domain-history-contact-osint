@@ -11,7 +11,7 @@
  * both the domain and the referring page are gone.
  */
 import { httpGet, withRetry, UA } from './http.js';
-import { DeadlineReached, timeoutSignal } from '../core/clock.js';
+import { DeadlineReached, StoppedWaiting, timeoutSignal } from '../core/clock.js';
 
 export async function fetchUrlscan(domain) {
   const url = `https://urlscan.io/api/v1/search/?q=domain%3A${encodeURIComponent(domain)}&size=100`;
@@ -61,18 +61,24 @@ export async function fetchUrlscan(domain) {
  * Results are gated on actually containing the domain, and anything that does not
  * is counted in `discarded` rather than quietly dropped.
  */
-export async function fetchArquivo(domain) {
+// The full-text search is one request that may take as long as the run allows. Measured 2026-10-07 with four
+// queries at once: 34 s for a domain with no mentions, 86 s for theranos.com, and earlier that day HTTP 500
+// after 61 s. The old two tries of 60 s threw away answers that were on their way and started the same slow
+// query again. It still never holds the run up: the caller stops waiting (`stop`) once everything else is done.
+const TEXT_SEARCH_TIMEOUT_MS = 300_000;
+const NOT_WAITED = 'did not answer before the rest of the scan was done, so the run did not wait for it. Its data is unknown, not absent: re-run later.';
+
+export async function fetchArquivo(domain, { stop = null } = {}) {
   const needle = domain.toLowerCase();
   const phrase = `"${domain}"`;
   const url = `https://arquivo.pt/textsearch?q=${encodeURIComponent(phrase)}&maxItems=50`;
 
-  // The two halves share nothing and the full-text half is the slow one (60 s a try, measured
-  // 123 s for both tries on theranos.com), so they run side by side: a slow search no longer
-  // holds back the captures, and a run cut short by its time limit keeps whichever half answered.
+  // The two halves share nothing and the full-text half is the slow one, so they run side by side:
+  // a slow search never holds back the captures, and a run cut short keeps whichever half answered.
   // The no-op catches only stop an early rejection counting as unhandled; the awaits below handle it.
   const cdxUrl = `https://arquivo.pt/wayback/cdx?url=${encodeURIComponent(`${domain}/*`)}&output=json&limit=200`;
-  const textP = withRetry(() => httpGet(url, { timeoutMs: 60_000 }), { attempts: 2 });
-  const cdxP = withRetry(() => httpGet(cdxUrl, { timeoutMs: 45_000, raw: true }), { attempts: 2 });
+  const textP = httpGet(url, { timeoutMs: TEXT_SEARCH_TIMEOUT_MS, signal: stop });
+  const cdxP = withRetry(() => httpGet(cdxUrl, { timeoutMs: 45_000, raw: true, signal: stop }), { attempts: 2 });
   textP.catch(() => {});
   cdxP.catch(() => {});
 
@@ -86,7 +92,10 @@ export async function fetchArquivo(domain) {
     const { json } = await textP;
     items = json?.response_items || [];
     estimatedTotal = json?.estimated_nr_results ?? null;
-  } catch (err) { textSearchError = String(err.message).slice(0, 150); textFailure = err; }
+  } catch (err) {
+    textSearchError = err instanceof StoppedWaiting ? NOT_WAITED : String(err.message).slice(0, 150);
+    textFailure = err;
+  }
 
   const mentions = items
     .map((i) => ({
@@ -116,12 +125,17 @@ export async function fetchArquivo(domain) {
         mime: r.mime || null,
         replayUrl: r.timestamp && r.url ? `https://arquivo.pt/wayback/${r.timestamp}/${r.url}` : null,
       }));
-  } catch (err) { cdxError = String(err.message).slice(0, 150); cdxFailure = err; }
+  } catch (err) {
+    cdxError = err instanceof StoppedWaiting ? NOT_WAITED : String(err.message).slice(0, 150);
+    cdxFailure = err;
+  }
 
   // Same rule as Common Crawl: if neither half answered, we know nothing about
   // this domain's presence in Arquivo - that is not the same as it holding none.
   if (textSearchError && cdxError) {
-    if (textFailure instanceof DeadlineReached && cdxFailure instanceof DeadlineReached) throw textFailure;   // out of time, not unreachable
+    // Out of time, or no longer waited for: not the same as unreachable.
+    const timed = (e) => e instanceof DeadlineReached || e instanceof StoppedWaiting;
+    if (timed(textFailure) && timed(cdxFailure)) throw textFailure;
     throw new Error(`Arquivo.pt unreachable on both full-text and CDX - data is UNKNOWN, not absent (${textSearchError})`);
   }
 
@@ -138,6 +152,9 @@ export async function fetchArquivo(domain) {
     sourceUrl: url,
     cdxSourceUrl: cdxUrl,
     errors: [textSearchError, cdxError].filter(Boolean),
+    // Said in the block itself, not only in the coverage notes: "0 mentions" must never read as "none".
+    fullTextSearch: textSearchError ? `Did not answer: ${textSearchError}` : 'Answered.',
+    capturesLookup: cdxError ? `Did not answer: ${cdxError}` : 'Answered.',
     references: mentions.slice(0, 50),
     captures: captures.slice(0, 100),
     note: (mentions.length || captures.length)

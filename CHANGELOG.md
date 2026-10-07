@@ -172,6 +172,18 @@ People, organisations, IP geolocation, and WHOIS history — closes the TruTrace
   the summary row written; a source that ignores the abort, at 24.8 s of 30; every service hanging
   at once, at 15.2 s of 20, with the free summary row as the dataset, which is all the quality
   check needs to see.
+- **Arquivo.pt's search never holds a run up, and its slow answers are no longer thrown away.**
+  Measured 2026-10-07: its full-text search answered in 34 s for a domain with no mentions and in
+  86 s for theranos.com, and that morning failed with HTTP 500 after 61 s. Two tries of 60 s threw
+  the 86 s answer away twice and could keep a run waiting two minutes after everything else was done.
+  Now it is one request that runs beside the scan. When everything else is done, and at least 45 s
+  have passed (enough for a dead domain's 34 s "no mentions" answer), the run stops waiting, keeps
+  Arquivo's captures, and the Arquivo block says the search did not answer (`fullTextSearch`, and
+  `capturesLookup` for the other half), so "0 mentions" never reads as "none". A quick "is it up?"
+  check would not help: the home page and the captures list answered in 3.6 s while the search took
+  86 s. Checked with the real Actor against a scripted network: a search that never answers held the
+  run to 124.6 s and now ends it at 46.8 s; a search that answers after 70 s while the scan is still
+  busy was lost on both tries (0 mentions, 123.6 s) and is now kept (1 mention, 92.8 s).
 - **License is MIT** in both `LICENSE` and `package.json` (was Apache-2.0 in the latter).
 - **IP geolocation via ip-api.com (free, no key).** Every historical IP from passive DNS
   is now auto-enriched with country, city, ISP, org and AS number using the free batch

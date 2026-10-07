@@ -2,7 +2,7 @@ import { test, mock, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 
-import { setDeadline, msLeft, expired, cap, deadlineFor, DeadlineReached, FINISH_RESERVE_MS } from '../src/core/clock.js';
+import { setDeadline, msLeft, expired, cap, deadlineFor, DeadlineReached, StoppedWaiting, FINISH_RESERVE_MS } from '../src/core/clock.js';
 import { httpGet, withRetry } from '../src/collectors/http.js';
 import { ArchiveLimiter } from '../src/core/ratelimit.js';
 import { SourceRegistry, STATUS, incomplete } from '../src/core/sources.js';
@@ -126,7 +126,7 @@ test('a source cut by the clock is time_limited, which counts as incomplete and 
   assert.equal(incomplete(by.crtsh), true);
   assert.equal(incomplete(by.rdap), false);
   assert.equal(sources.counts().time_limited, 1);
-  assert.match(sources.explain(), /Arquivo\.pt did not finish before the run's time limit/);
+  assert.match(sources.explain(), /Arquivo\.pt did not answer in the time it was given/);
 });
 
 test('a collector that calls fetch itself is still seen as out of time when the clock aborted it', async () => {
@@ -237,4 +237,59 @@ test('pages most likely to name people are read first, oldest first within each 
   ];
   assert.deepEqual(readOrder(sampled).map((p) => new URL(p.original).pathname), ['/contact', '/team', '/', '/products/widget', '/pricing']);
   assert.equal(sampled[0].original, 'https://example.com/products/widget', 'the report order must not change');
+});
+
+// ── Arquivo.pt never holds the run up (2026-10-07) ──────────────────────────
+
+test('a request the caller stops waiting for ends at once, and is not retried', async () => {
+  const server = await hangingServer();
+  try {
+    const stop = new AbortController();
+    let calls = 0;
+    setTimeout(() => stop.abort(), 100);
+    const t0 = Date.now();
+    await assert.rejects(
+      withRetry(() => { calls += 1; return httpGet(server.url, { timeoutMs: 30_000, signal: stop.signal }); }, { attempts: 4 }),
+      StoppedWaiting,
+    );
+    assert.equal(calls, 1);
+    assert.ok(Date.now() - t0 < 1_000, `took ${Date.now() - t0} ms`);
+  } finally { server.close(); }
+});
+
+test('when the run stops waiting, Arquivo keeps its captures and says the search did not answer', async () => {
+  const capture = JSON.stringify({ url: 'http://example.com/', timestamp: '20150101000000', status: '200', mime: 'text/html' });
+  fakeFetch({ hang: ['arquivo.pt/textsearch'], answer: { 'arquivo.pt/wayback/cdx': capture } });
+  const stop = new AbortController();
+  setTimeout(() => stop.abort(), 150);
+  const t0 = Date.now();
+  const out = await fetchArquivo('example.com', { stop: stop.signal });
+  assert.ok(Date.now() - t0 < 1_000, `took ${Date.now() - t0} ms`);
+  assert.equal(out.captureCount, 1);
+  assert.equal(out.capturesLookup, 'Answered.');
+  assert.match(out.fullTextSearch, /^Did not answer: did not answer before the rest of the scan was done/);
+  assert.match(out.fullTextSearch, /unknown, not absent/);
+});
+
+test('the Arquivo search is one request: a failure is not retried from scratch', async () => {
+  let searches = 0;
+  mock.method(globalThis, 'fetch', (url) => {
+    if (String(url).includes('textsearch')) { searches += 1; return Promise.resolve(new Response('busy', { status: 500 })); }
+    return Promise.resolve(new Response('', { status: 200 }));
+  });
+  const out = await fetchArquivo('example.com');
+  assert.equal(searches, 1);
+  assert.match(out.fullTextSearch, /HTTP 500/);
+});
+
+test('if both halves were not waited for, the source reads as not answered in time, never as empty or failed', async () => {
+  fakeFetch({ hang: ['arquivo.pt'] });
+  const stop = new AbortController();
+  setTimeout(() => stop.abort(), 100);
+  const sources = new SourceRegistry();
+  await sources.run('arquivo', 'Arquivo.pt', () => fetchArquivo('example.com', { stop: stop.signal }));
+  const [rec] = sources.toArray();
+  assert.equal(rec.status, STATUS.TIME_LIMITED);
+  assert.match(rec.note, /does not wait for an extra/);
+  assert.equal(incomplete(rec), true);
 });

@@ -10,7 +10,7 @@
  * A dead domain is this actor's expected input, not an error condition.
  */
 
-import { DeadlineReached, msLeft } from './clock.js';
+import { DeadlineReached, StoppedWaiting, msLeft } from './clock.js';
 
 export const STATUS = {
   OK: 'ok',                    // queried, returned data
@@ -25,6 +25,7 @@ export const STATUS = {
 export const incomplete = (rec) => [STATUS.FAILED, STATUS.RATE_LIMITED, STATUS.TIME_LIMITED].includes(rec?.status);
 
 const TIME_NOTE = 'the run ran out of time before this source answered - absence of data here does NOT mean the domain has none. Raise the run timeout (Input > Run options) to read it';
+const WAIT_NOTE = 'it had not answered when everything else in the scan was done, and the run does not wait for an extra - absence of data here does NOT mean the domain has none. Re-run later';
 
 // Sources finish in whatever order the network allows; the report lists them in pipeline order.
 const ORDER = [
@@ -77,7 +78,8 @@ export class SourceRegistry {
       // Whatever failed once the run's clock was out failed because of it, as far as anyone can tell: a
       // collector that calls fetch itself sees the clock's abort as a plain timeout error, and one that
       // wraps its errors (Common Crawl) hides the cause in the message.
-      const outOfTime = err instanceof DeadlineReached || msLeft() < 50;
+      const notWaited = err instanceof StoppedWaiting;
+      const outOfTime = notWaited || err instanceof DeadlineReached || msLeft() < 50;
       const rateLimited = !outOfTime && /429|rate.?limit|refused|blocked|throttl/i.test(String(err?.message || ''));
       done({
         source: name,
@@ -87,7 +89,7 @@ export class SourceRegistry {
         durationMs: Date.now() - started,
         error: String(err?.message || err).slice(0, 300),
         note: outOfTime
-          ? TIME_NOTE
+          ? (notWaited ? WAIT_NOTE : TIME_NOTE)
           : (rateLimited
             ? 'we were throttled - absence of data here does NOT mean the domain has none'
             : null),
@@ -129,7 +131,7 @@ export class SourceRegistry {
     else parts.push('No source returned data for this domain.');
     if (c.empty) parts.push(`${c.empty} source(s) responded but hold nothing for this domain.`);
     if (limited.length) parts.push(`${limited.join(', ')} rate-limited us, so their data is unknown rather than absent.`);
-    if (late.length) parts.push(`${late.join(', ')} did not finish before the run's time limit, so their data is unknown rather than absent.`);
+    if (late.length) parts.push(`${late.join(', ')} did not answer in the time it was given, so their data is unknown rather than absent.`);
     if (c.failed) parts.push(`${c.failed} source(s) errored.`);
     if (c.skipped) parts.push(`${c.skipped} source(s) were not applicable.`);
     return parts.join(' ');
