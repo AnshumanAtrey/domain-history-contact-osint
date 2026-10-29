@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-10-30
+
+- Store discounts on contacts and mentions (10% off on Scale, 20% off on Business and above); the domain scan fee is unchanged.
+- Two example tasks on the Store (`.actor/tasks.json`, published by CI); the kit's workflow and scripts.
+
 ## 1.0 - 2026-09-11 - first release
 
 First public release. Everything below 1.0 was pre-release development; 0.4 was never deployed.

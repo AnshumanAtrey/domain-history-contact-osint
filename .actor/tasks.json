@@ -1,0 +1,37 @@
+{
+  "$comment": "Example tasks published on the Store by scripts/publish-tasks.mjs after every deploy (CI only). Each one is a search people type, with its own Google-indexed landing page and .md (manager/rules/SEO.md). theranos.com is the prefill: a dead company's domain with a long public archive.",
+  "options": {
+    "build": "latest",
+    "memoryMbytes": 2048,
+    "timeoutSecs": 1800
+  },
+  "tasks": [
+    {
+      "name": "domain-previous-owner-lookup",
+      "title": "Who owned this domain? Previous owner and archived contacts",
+      "description": "Find who ran a domain before: past owners from WHOIS and registration history, plus the emails, phone numbers, people and organizations its archived pages named, each with the source URL and date it was seen. Works on live, parked, expired and dead domains. Replace theranos.com with yours.",
+      "input": {
+        "domains": "theranos.com",
+        "depth": "quick"
+      },
+      "seoTitle": "Domain Previous Owner Lookup - Archived Contacts",
+      "seoDescription": "Who owned a domain before? Past owners plus the emails, phones and people its archived pages named, each with its source URL and date.",
+      "inputSchemaFields": ["domains", "depth", "sections"],
+      "datasetView": "contacts"
+    },
+    {
+      "name": "expired-domain-history-check",
+      "title": "Expired domain history check before you buy a domain",
+      "description": "Check an expired or parked domain's past before buying it: who owned it, what its old pages said, its subdomains, hosting and tracking IDs, and who it was connected to, read deeper from the web archive. Each finding carries its source URL and date.",
+      "input": {
+        "domains": "theranos.com",
+        "depth": "standard",
+        "sections": ["ownership", "old_pages", "subdomains", "hosting", "tracking_ids", "contacts"]
+      },
+      "seoTitle": "Expired Domain History Check - Before You Buy",
+      "seoDescription": "An expired domain's past before you buy: owners, old pages, subdomains, hosting and tracking IDs from the web archive, each with source URL and date.",
+      "inputSchemaFields": ["domains", "depth", "sections"],
+      "datasetView": "contacts"
+    }
+  ]
+}

@@ -41,6 +41,7 @@ PAY_PER_EVENT model:
 - Domain scan: $0.125 per GB of run memory, $0.25 at the default 2 GB, charged once per domain at any depth. Covers the archive crawl, rendering, the entity model, registration, DNS, certificate and reference lookups, and the coverage report.
 - Contact with source: $0.02 per row that identifies someone (email, phone, a person or organisation that is part of the site, or a registrant detail from WHOIS history, certificates or public code).
 - Mention: $0.002 per row naming a person or organisation that only appears in the site's content.
+- On Apify's Scale plan contacts and mentions are 10% less, on Business and above 20% less; the domain scan fee is the same on every plan.
 - Summary row: free. Platform compute is included in the events.
 
 Typical costs (row counts measured on Apify at Standard depth, prices at the default 2 GB):

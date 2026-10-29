@@ -55,6 +55,8 @@ Pay-per-event. You pay for the scan and for what it finds; platform compute is i
 | `Contact with source` | $0.02 | Per row that identifies someone: an email, a phone number, a person or organisation that is part of the site, or a registrant detail from WHOIS history, certificates or public code |
 | `Mention` | $0.002 | Per row naming a person or organisation that only appears in the site's content, such as a company in a biography. A tenth of a contact, kept for context |
 
+On paid Apify plans the contact and mention prices are 10% less on Scale ($0.018 and $0.0018) and 20% less on Business and above ($0.016 and $0.0016); the domain scan fee is the same on every plan.
+
 The summary row is free.
 
 ### Typical scan costs
