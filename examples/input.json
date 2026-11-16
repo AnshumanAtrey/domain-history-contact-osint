@@ -1,0 +1,14 @@
+{
+  "domains": "theranos.com",
+  "depth": "quick",
+  "sections": [
+    "contacts",
+    "ownership",
+    "subdomains",
+    "hosting",
+    "old_pages",
+    "server_tech",
+    "tracking_ids",
+    "mentions"
+  ]
+}

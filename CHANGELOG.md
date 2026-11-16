@@ -1,0 +1,288 @@
+# Changelog
+
+## 2026-10-30
+
+- Store discounts on contacts and mentions (10% off on Scale, 20% off on Business and above); the domain scan fee is unchanged.
+- Two example tasks on the Store (`.actor/tasks.json`, published by CI); the kit's workflow and scripts.
+
+## 1.0 - 2026-09-11 - first release
+
+First public release. Everything below 1.0 was pre-release development; 0.4 was never deployed.
+
+People, organisations, IP geolocation, and WHOIS history — closes the TruTrace spec gaps.
+
+- **Named people and organisations extracted from archived pages, with roles.** Two
+  layers, neither tied to a platform:
+  1. *Declared* — schema.org JSON-LD and microdata (`Person`, `Organization`, `founder`,
+     `employee`, `worksFor`, `jobTitle`), `<meta name="author">`, `rel="author"`, and the
+     copyright footer (`© 2015 Theranos, Inc.`). The page states the type; nothing is guessed.
+  2. *Named-entity recognition* — a multilingual token-classification model
+     (`bert-base-multilingual-cased-ner-hrl`, int8, 173MB, baked into the image) reads the
+     rendered page's `innerText` line by line. A job title on the same visible line becomes
+     the person's `role` ("Geschäftsführer: Dirk Hünten, Michael Knippel" labels both), an
+     organisation on the same line becomes `worksFor`, and the line itself is kept as a
+     citable `snippet`. Lines repeated across a site's pages (header, nav, footer) are
+     inferred once and replayed as sightings, so cost scales with unique text, not pages.
+
+  A first version used capitalised-word regexes plus three word blocklists. It reached 4
+  people / 0 false positives on the test WordPress site, then emitted "Kosten", "Buch" and
+  "Rabatt" as people on the first German page it met — every blocklist entry was a patch
+  for one site that guaranteed a different failure on the next. Bake-off across a WordPress
+  blog, a hand-built Rails site and a German Impressum (13 ground-truth entities): rule-based
+  `compromise` missed every non-Western name; English `bert-base-NER` scored 12/13 but leaked
+  6 of 7 known false positives; the multilingual model scored 12/13 and leaked 1 (a lone first
+  name, removed by the two-word rule). The one miss was declared in JSON-LD. Filters that
+  remain are shape and frequency only: two words minimum for a person, score ≥ 0.9, an
+  organisation found on a Title-Case-only line is a menu label unless it is a ≥2-word legal
+  entity, and `worksFor` is taken only from short byline lines, never from biography prose.
+
+  Verified end-to-end on theranos.com (dead corporate site, 2013–2015 archive) with no
+  site-specific code: the full board — Elizabeth Holmes [Founder], Donald L. Lucas
+  [Chairman], Robert B. Shapiro, Channing Robertson, Peter Thomas, William K. Bowes — plus
+  the NPR host who interviewed Holmes, correctly left as a mention.
+- **`relation: site | mention` on every person and organisation, list sorted site-first.**
+  Correct NER on a blog about college admissions returns fifty universities; they are real
+  organisations and real noise. `site` means declared in structured data, or (people) seen
+  on 3+ distinct pages or carrying a job title, or (organisations) present on at least half
+  the pages the way a footer name is. `pagesSeenOn` is exposed so the threshold is auditable.
+  `snippet` carries the visible line each entity was read from.
+- **Cost measured on the platform, not just the laptop.** Per-page timers log fetch /
+  render / extraction / entity time, summed over the 3 parallel workers. On an M-series
+  laptop the model was ~3% of a 30-page quick run (people+orgs 6s of 77s). The first live
+  run on Apify at the 2048MB minimum told a different story: 531s total, people+orgs 679s -
+  1.47s per line against 12ms locally. Cause: onnxruntime sizes its thread pool from the
+  HOST's core count, the container's cgroup quota is invisible to it, and a dozen threads
+  fought over a half-core share while also starving Chromium (render 346s). Fix: Apify gives
+  one CPU per 4096MB and publishes `APIFY_MEMORY_MBYTES`, so `intraOpNumThreads` is
+  `round(memory / 4096)`, minimum 1; unset locally, nothing changes. Same run, same 2048MB:
+  **182s total, people+orgs 75s, render 162s, 0.10 compute units (was 0.30)**. For
+  comparison, 4096MB without the fix: 275s, 0.31 CU - doubling memory halved the time at
+  the same cost; fixing the threads cut the cost. Output was identical across all three runs
+  and the laptop (same 40 contacts, same 4 site-level entities). Chromium rendering is now
+  the largest CPU cost; archive.org fetch is 56s and outside our control.
+- **Output layout: the contacts table is the dataset.** One row per contact per source, with
+  the URL and capture date that produced it; people and organisations also carry `role`,
+  `worksFor`, `relation` and the evidence `snippet`. One summary row per domain closes each
+  block with the coverage verdict, so a run is never an empty table. The full report is the
+  run's `OUTPUT` record (Console's Output tab) and `REPORT-<domain>`. The previous layout put
+  the report in the dataset and the contacts in a separate named dataset, so the Store preview
+  showed one JSON blob per domain and the evidence table lived elsewhere. Now every output is
+  inside the run's own default storages, which is the contract the Actor's limited-permissions
+  declaration is meant for, the Store preview is the contacts table itself, and pay-per-result
+  maps directly onto "one row per contact".
+- **Store listing is deployed from the repo.** `apify push` never updates title, description,
+  SEO fields, categories, permissions or the example input on an existing Actor, so those were
+  empty on the platform. `scripts/store-metadata.mjs` runs after every deploy, validates the
+  portfolio shipping rules (title 63, seoTitle 60, seoDescription 200, description 300, no
+  em dashes, 3 categories max) and PUTs only what differs. Logo lives at `.actor/logo.svg` /
+  `.actor/logo.png`; the icon field is not writable through the API and is uploaded once in
+  Console.
+- **Pricing: pay-per-event, sized from measured cost.** Developer cost is $0.20 per compute
+  unit (Apify's FREE/BRONZE rate; measured $0.205 across five platform runs): a Quick scan
+  costs $0.02, a Standard scan $0.04. The lesson from the portfolio's nmap incident (per-record
+  pricing only, no floor, -769% margin) is that the per-run fee must cover the compute
+  ceiling, so the run defaults are set to 2 GB and 1800 s (ceiling 1 CU = $0.20) and the
+  `apify-actor-start` event, which Apify bills once per GB, is $0.125: $0.25 per scan at the
+  defaults, of which the developer keeps 80% = $0.20, break-even even on a run that hits the
+  timeout with nothing found. Rows are charged from code with two events so a corporate
+  archive naming 140 universities is not billed like 140 contacts: `contact` $0.02 (email,
+  phone, a person or organisation that is part of the site, or any registration, WHOIS
+  history, certificate or code source) and `mention` $0.002 (a name that only appears in the
+  content). The summary row is free and the synthetic dataset-item event is deliberately not
+  priced. Under pay-per-event, `Actor.pushData(rows, event)` charges within the user's spend
+  limit and writes only what was charged; the summary row says so if that happens. Three
+  Standard scans measured on the platform (4 GB, then priced at the 2 GB default): a small
+  dead site, 6 contacts + 36 mentions, $0.44 to the user on $0.044 of compute; a sparse
+  result, 3 contacts, $0.31 on $0.046; a large corporate archive, 231 rows, 47 contacts +
+  183 mentions, $1.56 on $0.038. Developer profit 72-78% of price, in line with the
+  portfolio. Memory barely moves compute (4 GB finishes in half the time for about the same
+  CU) but doubles the per-GB scan fee, which is why 2 GB is the default.
+  Applied by CI on first deploy (`store.json` `apply: true`); later changes go through
+  Console because Apify allows one pricing change per 30 days. Paid test on the platform:
+  `chargedEventCounts` came back `apify-actor-start: 2, contact: 6, mention: 34` for a run
+  that wrote 6 contact rows, 34 mention rows and one free summary row, $0.44 to the user.
+  Note for the next person who tests this: the counts settle a minute or so after the run
+  finishes; reading them the instant the run ends shows zeros for the custom events. The run
+  logs the pricing view it received at startup, so that question is answerable from the log.
+- **Pricing-change rules, established against the API.** The pricing history is append-only
+  in time, records can never be removed or edited, and only one future-dated record may exist
+  at a time. Increases, new paid events and model changes need 14 days' notice and are limited
+  to once a month; decreases and description edits take effect immediately. On this private
+  Actor an increase was accepted 50 minutes after the first set, where the portfolio's public
+  Actors were refused 11 days after theirs, so the monthly lock appears to attach to public or
+  in-use Actors; Apify does not document that. The test left one scheduled record, contact
+  $0.021 from 2026-09-25, that the API will not let anyone cancel; the deploy workflow runs
+  once on that date and the metadata script appends the decrease back to $0.02. The script
+  now reconciles decreases from `store.json` on every deploy and never automates an increase.
+- **Quick is the default depth; published to the Store.** Apify's daily quality check runs
+  every public Actor with its default input and requires it to finish within 5 minutes, or
+  after 3 failing days the Actor is marked under maintenance. The default input (theranos.com
+  at Standard) took 351 s at the 2 GB default, so the pre-selected depth is now Quick: about
+  30 archived pages in about 3 minutes, which on theranos.com still returns the founder and
+  the board. Standard and Deep are one click away. Publication (`isPublic`) is declared in
+  `store.json` and applied by the same CI step as every other listing field.
+- **Nothing waits unbounded any more.** A Quick run on theranos.com hung for 15 minutes on
+  the platform at 0% CPU after "30 sampled": a promise that never settled, with every worker
+  queued behind it, heading for the 30-minute timeout, a charged start fee and no report.
+  Two candidates fit the idle silence, and both are closed: `page.content()` and
+  `page.evaluate()` had no timeout (a wedged renderer holds them forever), and the archive
+  limiter honoured `Retry-After` up to 600 s without logging. Now every Playwright call is
+  bounded, two consecutive render failures relaunch the browser (killing the process if
+  `close()` hangs), each page task has a 150 s deadline and can no longer take the stage
+  down with it, the limiter announces any wait over 15 s and caps backoff at 120 s, and the
+  archive stage has a time budget per depth (Quick 180 s, Standard 600 s, Deep 1200 s;
+  Quick was 120 s for one build and clipped 4 of 30 pages on a healthy heavy site).
+  When the budget trips, the unfetched pages are counted in `old_pages.skippedForTime`, the
+  section is marked incomplete with "not absent, not read yet", and the run still finishes
+  with its summary row and report.
+- **A run always finishes inside its own time limit.** Apify's quality check timed out the
+  Quick default on theranos.com three days running and put the Actor under maintenance on
+  2026-10-01 (failing run `5yFChUdz9AvXSmtY9`: 3 min 55 s between "=== theranos.com" and the
+  archive line, then the 300 s limit). The log could not say why, because no source was timed.
+  Timing each source on that domain found it: they ran strictly one after another, so 199 s
+  passed before the first archived page was read - Arquivo.pt's full-text search 123 s of it
+  (its server answers HTTP 500 after 61 s, and the retry waits for a second one), Common Crawl
+  29 s, the Wayback index 21 s, crt.sh 15 s - and the page stage after that was allowed 180 s,
+  plus 150 s more for pages already in flight. That fits in five minutes only on a day
+  Arquivo.pt happens to answer. Now:
+  - Every source starts at once, the Wayback crawl first, and the pages wait for nothing but the
+    crawl: the archive line prints 19 s into the run instead of about 170 s. Common Crawl waits
+    only for the dates it needs and runs beside the pages. Same domain, same laptop: 124 s
+    instead of 236 s, with identical results (110 dataset rows each, and the same 109 contact
+    statements, none different).
+  - A run clock (`src/core/clock.js`) reads the platform's `ACTOR_TIMEOUT_AT` and stops every
+    stage 40 s before it (a quarter of the time on runs shorter than three minutes), because a run
+    the platform stops writes nothing: the contacts table and the report are assembled last. Every
+    request, retry wait, archive cooldown and page task is capped by it, and a source that never
+    settles is given up on two seconds after it. With several domains each gets an equal share of
+    the time that is left.
+  - Whatever the clock cuts is reported as `time_limited`: unknown, not absent. It shows in the
+    sources list, the coverage notes, the contacts section and the summary row, with the advice to
+    raise the run timeout. An index that could not be read now fails instead of reading as "never
+    archived", and an empty answer that only arrived after the deadline is not trusted as empty.
+    The mentions section now says when one of Arquivo.pt's two searches did not answer, which it
+    used to hide behind "complete".
+  - Pages most likely to name people (contact, about, team, board) are read first. The sampler
+    hands them over oldest first, so a run cut short used to lose the newest pages and with them
+    the current team.
+  - Arquivo.pt's two searches run side by side, so a failing full-text search no longer holds back
+    its captures. The three page workers share one Chromium launch (the old check could start one
+    each when they arrived together; a laptop launches fast enough that it never did).
+  - Each source logs its outcome and time (`source wayback_cdx: ok (2725) in 18.6s`), so a slow
+    run explains itself.
+
+  Checked with the real Actor, Chromium and model against a scripted network. A 40 s limit cut
+  the page stage at 30 s with 9 of 30 pages read, all five contact, about, team, press and careers
+  pages among them. A Wayback index that never answers ended at 22.8 s of 30 with the report and
+  the summary row written; a source that ignores the abort, at 24.8 s of 30; every service hanging
+  at once, at 15.2 s of 20, with the free summary row as the dataset, which is all the quality
+  check needs to see.
+- **Arquivo.pt's search never holds a run up, and its slow answers are no longer thrown away.**
+  Measured 2026-10-07: its full-text search answered in 34 s for a domain with no mentions and in
+  86 s for theranos.com, and that morning failed with HTTP 500 after 61 s. Two tries of 60 s threw
+  the 86 s answer away twice and could keep a run waiting two minutes after everything else was done.
+  Now it is one request that runs beside the scan. When everything else is done, and at least 45 s
+  have passed (enough for a dead domain's 34 s "no mentions" answer), the run stops waiting, keeps
+  Arquivo's captures, and the Arquivo block says the search did not answer (`fullTextSearch`, and
+  `capturesLookup` for the other half), so "0 mentions" never reads as "none". A quick "is it up?"
+  check would not help: the home page and the captures list answered in 3.6 s while the search took
+  86 s. Checked with the real Actor against a scripted network: a search that never answers held the
+  run to 124.6 s and now ends it at 46.8 s; a search that answers after 70 s while the scan is still
+  busy was lost on both tries (0 mentions, 123.6 s) and is now kept (1 mention, 92.8 s).
+- **License is MIT** in both `LICENSE` and `package.json` (was Apache-2.0 in the latter).
+- **IP geolocation via ip-api.com (free, no key).** Every historical IP from passive DNS
+  is now auto-enriched with country, city, ISP, org and AS number using the free batch
+  endpoint (up to 100 IPs in a single request). Zero config — runs automatically.
+- **SecurityTrails integration (BYOK, free tier: 2500 queries/month).** New optional
+  `securityTrailsApiKey` input field. Free signup at securitytrails.com, no credit card.
+  Provides dated DNS history (A and NS records with first/last seen) and WHOIS history
+  with full registrant details going back to 2008. Contacts from WHOIS records are fed
+  into the ContactStore with provenance.
+- **WHOIS history via Whoxy API (BYOK).** New optional `whoisHistoryApiKey` input field.
+  Costs $0.005 per lookup, no monthly fee, data from November 2012. Pre-GDPR registrant
+  names, emails, phones, addresses and organisations extracted as high-confidence contacts.
+  Privacy-guard placeholders filtered out.
+- **Contact breakdown includes people and orgs.** The `contacts` section `breakdown`
+  now counts `person` and `organization` types alongside `email` and `phone`.
+- **Source count: 14.** 12 run with zero config, 2 optional BYOK sources (SecurityTrails
+  and Whoxy) unlock WHOIS history when keys are provided.
+
+## 0.3 - 2026-09-09
+
+Checkbox-based section picker and restructured JSON output.
+
+- **"What to include in the report" multi-select.** Eight checkboxes, all ticked by
+  default so "type domain, press Start" is unchanged. Labels are data-level ("Emails
+  and phone numbers", "Subdomains and sister brands"), not tool names. Unticking
+  "Saved copies of the old website" genuinely saves ~10x runtime because it skips
+  the archive page fetch. Unticking "Emails and phone numbers" alone makes the report
+  cleaner but not faster, because contacts ride the same archive bytes.
+- **JSON output sectioned by checkbox.** Top-level keys: `status` (always present),
+  `youAskedFor` (echoes the ticks), `results` (one key per ticked section), `coverage`
+  (one entry per section: complete vs incomplete with a note), `sourcesDetail` (raw
+  per-source detail for power users). A section that was not ticked does not appear in
+  `results` at all, and its collectors are not run.
+- **Collector gating.** Each source is mapped to the sections that need it. When no
+  section needs a source, it is skipped (status `skipped` in the sources array) and
+  its network call is never made. Measured: "ownership + subdomains" runs in 5.5s vs
+  28s for a full scan.
+- **Per-section coverage.** The coverage report now says "6 of 8 sections complete"
+  instead of listing raw source names. Each section carries `status` (complete /
+  incomplete) and a `note` distinguishing "checked and genuinely empty" from "source
+  was unreachable — data is UNKNOWN, not absent".
+- **`aliveFrom` / `aliveUntil` in ISO date format** (was raw 14-digit timestamp).
+
+## 0.2 - 2026-09-09
+
+Five correctness fixes, every one found by running the actor on real domains rather
+than by reading the code. Baseline output kept at
+`runs/2026-09-09_baseline_emoji-cafe.json` so the change is diffable.
+
+- **Common Crawl now asks the crawls that cover the domain's lifetime.** Indexes were
+  sampled "newest plus three spread evenly across all history", so a domain that lived
+  2024-2025 was looked up in the 2008, 2017, 2021 and 2026 crawls and reported as having
+  no records. The domain's lifespan is now derived from Wayback captures, certificate
+  dates and RDAP events, and indexes are picked from inside that window.
+- **Passive DNS keeps every record type.** Only `NS` was harvested; `A`, `AAAA` and
+  `CNAME` were fetched and discarded. A provider returning `a emojis.cafe ->
+  162.214.80.100` plus three CNAMEs was reported as `historicalIps: []` with the source
+  marked empty. Historical IPs are the main pivot point in this whole report, and CNAME
+  queries enumerate subdomains for free. Measured on emojis.cafe: 0 items -> 7.
+- **Arquivo.pt no longer pads the report with unrelated pages.** Full-text search rejects
+  url-shaped queries, and the workaround was to strip the TLD and search the brand token
+  - which returns the whole internet when the brand token is an ordinary word. Measured
+  on emojis.cafe: `q=emojis` returned 50 rows out of an estimated 1,825,447 and *none of
+  them mentioned the domain*, while scoring the source "ok". Quoting the FQDN bypasses
+  the URL rejection: `"theranos.com"` returns 10 of 10 on-target, `"emoji.cafe"` narrows
+  the universe from 3,853,882 to 18. Every result is additionally gated on containing the
+  domain, and anything dropped is counted in `discarded` rather than silently binned.
+- **Arquivo's CDX API is now queried too.** The 400 error names it, and it returns
+  Arquivo's own archived captures - a second web archive sitting behind a different rate
+  limiter than archive.org, which is the one resource this actor actually contends for.
+- **`liveStatus` distinguishes delegated from hosted.** A domain answering NOERROR on NS
+  and SOA with no A, AAAA or MX was reported as `resolves` - a signpost with no building
+  behind it. States are now `hosted`, `mail_only`, `delegated_no_host`, `nxdomain` and
+  `no_records`, each with a plain-English `liveStatusExplained`.
+- **An unreachable source is no longer reported as an empty one.** Found while fixing the
+  above: index.commoncrawl.org went fully dark mid-development, every index errored, and
+  the collector still returned `count: 0` - which the registry scored `empty`, meaning
+  "genuinely nothing there". That is precisely the distinction this actor's coverage
+  report exists to preserve. Common Crawl and Arquivo now raise when no half of the
+  source answered, so the run reports the data as unknown and re-runnable.
+
+## 0.1 - 2026-09-08
+
+First build.
+
+- One-field input: a domain, plus an optional Quick/Standard/Deep depth selector.
+- Nine sources: Wayback CDX and raw `id_` replay, Common Crawl index, crt.sh, RDAP
+  (IANA bootstrap plus registry/registrar), Google Public DNS, Robtex and Mnemonic
+  passive DNS, urlscan.io, Arquivo.pt full-text, grep.app public code search.
+- Contacts emitted as statements: one dataset row per contact per source, each with
+  source URL, capture timestamp, replay URL, extraction method and a sightings array.
+- Per-source coverage report on every run. Rate-limited is reported separately from
+  empty, so a throttled source is never mistaken for an absent one.
+- Two-level hierarchical archive sampler (year floor, then path-score weighting, then
+  even temporal spacing) so contact pages are never starved by homepage captures.
+- Headless render pass over archived bytes via setContent, so inline JS executes
+  without spending a second archive request.

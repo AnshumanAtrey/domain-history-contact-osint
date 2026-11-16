@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "domain-history-contact-osint": {
+      "url": "https://mcp.apify.com?tools=anshumanatrey/domain-history-contact-osint",
+      "headers": {
+        "Authorization": "Bearer <YOUR_APIFY_TOKEN>"
+      }
+    }
+  }
+}
